@@ -1,0 +1,915 @@
+diff --git a/app/api/firecrawl/approve/route.ts b/app/api/firecrawl/approve/route.ts
+index 41213a7..5b4d471 100644
+--- a/app/api/firecrawl/approve/route.ts
++++ b/app/api/firecrawl/approve/route.ts
+@@ -1,6 +1,13 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { supabase, updateDiscoveryStatus } from '@/lib/supabase';
+ import { createPartner } from '@/lib/notion';
++import { mockDiscoveries } from '@/lib/mockData';
++
++const useMock = () =>
++  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
++  process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://localhost' ||
++  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'dummy' ||
++  process.env.NOTION_API_KEY === 'dummy';
+ 
+ export async function POST(request: NextRequest) {
+   try {
+@@ -13,6 +20,18 @@ export async function POST(request: NextRequest) {
+       );
+     }
+ 
++    if (useMock()) {
++      const created = [];
++      for (const id of discoveryIds) {
++        const discovery = mockDiscoveries.find(d => d.id === id);
++        if (!discovery) continue;
++        discovery.status = 'approved';
++        discovery.notion_page_id = discovery.id;
++        created.push({ discoveryId: discovery.id, notionPageId: discovery.id });
++      }
++      return NextResponse.json({ created, mock: true });
++    }
++
+     // Fetch discoveries
+     const { data: discoveries, error } = await supabase
+       .from('firecrawl_discoveries')
+diff --git a/app/api/firecrawl/crawl/route.ts b/app/api/firecrawl/crawl/route.ts
+index 8b507f5..fdd8a47 100644
+--- a/app/api/firecrawl/crawl/route.ts
++++ b/app/api/firecrawl/crawl/route.ts
+@@ -1,5 +1,13 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { startCrawl } from '@/lib/firecrawl';
++import { mockDiscoveries } from '@/lib/mockData';
++import { createDiscoveries } from '@/lib/supabase';
++
++const useMock = () =>
++  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
++  process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://localhost' ||
++  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'dummy' ||
++  !process.env.FIRECRAWL_API_KEY;
+ 
+ export async function POST(request: NextRequest) {
+   try {
+@@ -13,14 +21,50 @@ export async function POST(request: NextRequest) {
+       );
+     }
+ 
+-    const { jobId } = await startCrawl({
++    if (useMock() || clientName === 'Demo Client') {
++      // Return a fake job ID and append a mock discovery so the UI can show results
++      const jobId = `mock-job-${Date.now()}`;
++      mockDiscoveries.unshift({
++        id: jobId,
++        client_name: clientName,
++        partner_name: seedUrls[0] || 'New Discovery',
++        website: seedUrls[0] || 'https://example.com',
++        category: 'Generated',
++        partner_type: 'Brand',
++        notes: (keywords || []).join(', '),
++        inferred_reach: 50000,
++        status: 'pending',
++        created_at: new Date().toISOString(),
++      });
++      return NextResponse.json({ jobId, status: 'processing', mock: true });
++    }
++
++    const { jobId, results } = await startCrawl({
+       clientName,
+       seedUrls,
+       competitorDomains: competitorDomains || [],
+       keywords: keywords || [],
+     });
+ 
+-    return NextResponse.json({ jobId, status: 'processing' });
++    if (results.length > 0) {
++      const toInsert = results.map((r) => ({
++        client_name: clientName,
++        partner_name: r.partnerName,
++        website: r.website,
++        category: r.category,
++        partner_type: r.partnerType,
++        notes: r.notes,
++        inferred_reach: r.inferredReach,
++      }));
++
++      try {
++        await createDiscoveries(toInsert as any);
++      } catch (err) {
++        console.error('Failed to persist Firecrawl results to Supabase:', err);
++      }
++    }
++
++    return NextResponse.json({ jobId, status: 'processing', stored: results.length });
+   } catch (error) {
+     console.error('Error starting crawl:', error);
+     return NextResponse.json(
+diff --git a/app/api/firecrawl/discoveries/route.ts b/app/api/firecrawl/discoveries/route.ts
+index 00cddde..4ba9eed 100644
+--- a/app/api/firecrawl/discoveries/route.ts
++++ b/app/api/firecrawl/discoveries/route.ts
+@@ -1,5 +1,11 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getDiscoveriesByClient } from '@/lib/supabase';
++import { mockDiscoveries } from '@/lib/mockData';
++
++const useMock = () =>
++  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
++  process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://localhost' ||
++  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'dummy';
+ 
+ export async function GET(request: NextRequest) {
+   try {
+@@ -13,6 +19,11 @@ export async function GET(request: NextRequest) {
+       );
+     }
+ 
++    if (useMock() || client === 'Demo Client') {
++      const discoveries = mockDiscoveries.filter(d => d.client_name === client);
++      return NextResponse.json({ discoveries, mock: true });
++    }
++
+     const discoveries = await getDiscoveriesByClient(client);
+ 
+     return NextResponse.json({ discoveries });
+diff --git a/app/api/partners/[id]/route.ts b/app/api/partners/[id]/route.ts
+index 04959ad..b8cb2ef 100644
+--- a/app/api/partners/[id]/route.ts
++++ b/app/api/partners/[id]/route.ts
+@@ -1,11 +1,26 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getPartnerById, updatePartner } from '@/lib/notion';
++import { getMockPartnerById } from '@/lib/mockData';
++
++const useMock = () =>
++  !process.env.NOTION_API_KEY ||
++  process.env.NOTION_API_KEY === 'dummy' ||
++  process.env.NOTION_DATABASE_ID === 'dummy';
+ 
+ export async function GET(
+   request: NextRequest,
+   { params }: { params: { id: string } }
+ ) {
+   try {
++    if (useMock()) {
++      const partner = getMockPartnerById(params.id);
++      if (!partner) {
++        return NextResponse.json({ error: 'Partner not found' }, { status: 404 });
++      }
++      const notionUrl = `https://notion.so/${params.id.replace(/-/g, '')}`;
++      return NextResponse.json({ partner: { ...partner, notionUrl }, mock: true });
++    }
++
+     const partner = await getPartnerById(params.id);
+     const notionUrl = `https://notion.so/${params.id.replace(/-/g, '')}`;
+ 
+diff --git a/app/api/partners/route.ts b/app/api/partners/route.ts
+index ef7c3a2..fb33a86 100644
+--- a/app/api/partners/route.ts
++++ b/app/api/partners/route.ts
+@@ -1,5 +1,11 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { getPartnersByClient } from '@/lib/notion';
++import { getMockPartnersByClient } from '@/lib/mockData';
++
++const useMock = () =>
++  !process.env.NOTION_API_KEY ||
++  process.env.NOTION_API_KEY === 'dummy' ||
++  process.env.NOTION_DATABASE_ID === 'dummy';
+ 
+ export async function GET(request: NextRequest) {
+   try {
+@@ -13,6 +19,11 @@ export async function GET(request: NextRequest) {
+       );
+     }
+ 
++    if (useMock() || client === 'Demo Client') {
++      const { partners, metrics } = getMockPartnersByClient(client);
++      return NextResponse.json({ partners, metrics, mock: true });
++    }
++
+     const { partners, metrics } = await getPartnersByClient(client);
+ 
+     return NextResponse.json({ partners, metrics });
+diff --git a/app/discovery/page.tsx b/app/discovery/page.tsx
+index b88c6f2..53ab071 100644
+--- a/app/discovery/page.tsx
++++ b/app/discovery/page.tsx
+@@ -1,7 +1,6 @@
+ 'use client';
+ 
+ import { useState, useEffect } from 'react';
+-import { CLIENTS } from '@/lib/config';
+ import { FirecrawlDiscovery } from '@/lib/types';
+ import Link from 'next/link';
+ 
+@@ -14,6 +13,26 @@ export default function DiscoveryPage() {
+   const [discoveries, setDiscoveries] = useState<FirecrawlDiscovery[]>([]);
+   const [selectedDiscoveries, setSelectedDiscoveries] = useState<Set<string>>(new Set());
+   const [loading, setLoading] = useState(false);
++  const [clients, setClients] = useState<string[]>(['Demo Client']);
++  const [clientsLoading, setClientsLoading] = useState(true);
++
++  useEffect(() => {
++    const loadClients = async () => {
++      try {
++        const res = await fetch('/api/clients');
++        const data = await res.json();
++        if (res.ok && Array.isArray(data.clients)) {
++          setClients(data.clients);
++        }
++      } catch (error) {
++        console.error('Failed to load clients:', error);
++      } finally {
++        setClientsLoading(false);
++      }
++    };
++
++    loadClients();
++  }, []);
+ 
+   useEffect(() => {
+     if (selectedClient) {
+@@ -146,9 +165,10 @@ export default function DiscoveryPage() {
+             value={selectedClient}
+             onChange={(e) => setSelectedClient(e.target.value)}
+             className="block w-full max-w-xs px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
++            disabled={clientsLoading}
+           >
+-            <option value="">Choose a client...</option>
+-            {CLIENTS.map((client) => (
++            <option value="">{clientsLoading ? 'Loading clients...' : 'Choose a client...'}</option>
++            {clients.map((client) => (
+               <option key={client} value={client}>
+                 {client}
+               </option>
+@@ -251,7 +271,7 @@ export default function DiscoveryPage() {
+                         <div className="flex-1">
+                           <h3 className="font-semibold text-lg">{discovery.partner_name}</h3>
+                           {discovery.website && (
+-                            
++                            <a
+                               href={discovery.website}
+                               target="_blank"
+                               rel="noopener noreferrer"
+diff --git a/components/dashboard/ClientSelector.tsx b/components/dashboard/ClientSelector.tsx
+index 09187b4..c7db215 100644
+--- a/components/dashboard/ClientSelector.tsx
++++ b/components/dashboard/ClientSelector.tsx
+@@ -1,6 +1,6 @@
+ 'use client';
+ 
+-import { CLIENTS } from '@/lib/config';
++import { useEffect, useState } from 'react';
+ 
+ interface ClientSelectorProps {
+   selectedClient: string;
+@@ -8,6 +8,28 @@ interface ClientSelectorProps {
+ }
+ 
+ export default function ClientSelector({ selectedClient, onClientChange }: ClientSelectorProps) {
++  const fallbackClients = ['Demo Client'];
++  const [clients, setClients] = useState<string[]>(fallbackClients);
++  const [loading, setLoading] = useState(true);
++
++  useEffect(() => {
++    const loadClients = async () => {
++      try {
++        const res = await fetch('/api/clients');
++        const data = await res.json();
++        if (res.ok && Array.isArray(data.clients)) {
++          setClients(data.clients);
++        }
++      } catch (error) {
++        console.error('Failed to load clients, falling back to defaults:', error);
++      } finally {
++        setLoading(false);
++      }
++    };
++
++    loadClients();
++  }, []);
++
+   return (
+     <div className="mb-6">
+       <label htmlFor="client-select" className="block text-sm font-medium text-gray-700 mb-2">
+@@ -18,9 +40,10 @@ export default function ClientSelector({ selectedClient, onClientChange }: Clien
+         value={selectedClient}
+         onChange={(e) => onClientChange(e.target.value)}
+         className="block w-full max-w-xs px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
++        disabled={loading}
+       >
+-        <option value="">Choose a client...</option>
+-        {CLIENTS.map((client) => (
++        <option value="">{loading ? 'Loading clients...' : 'Choose a client...'}</option>
++        {clients.map((client) => (
+           <option key={client} value={client}>
+             {client}
+           </option>
+diff --git a/components/dashboard/PartnerDrawer.tsx b/components/dashboard/PartnerDrawer.tsx
+index 76936a1..2908c13 100644
+--- a/components/dashboard/PartnerDrawer.tsx
++++ b/components/dashboard/PartnerDrawer.tsx
+@@ -184,7 +184,7 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
+           {/* Open in Notion */}
+           {notionUrl && (
+             <div className="mt-8 pt-6 border-t">
+-              
++              <a
+                 href={notionUrl}
+                 target="_blank"
+                 rel="noopener noreferrer"
+diff --git a/components/dashboard/PartnerTable.tsx b/components/dashboard/PartnerTable.tsx
+index b252fb1..a3f868a 100644
+--- a/components/dashboard/PartnerTable.tsx
++++ b/components/dashboard/PartnerTable.tsx
+@@ -1,6 +1,6 @@
+ 'use client';
+ 
+-import { useState } from 'react';
++import { useEffect, useMemo, useState } from 'react';
+ import { Partner } from '@/lib/types';
+ import { formatReach } from '@/lib/utils';
+ 
+@@ -12,6 +12,43 @@ interface PartnerTableProps {
+ export default function PartnerTable({ partners, onPartnerClick }: PartnerTableProps) {
+   const [sortField, setSortField] = useState<keyof Partner>('name');
+   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
++  const baseColumns: Array<{ key: string; label: string; sortable?: keyof Partner }> = [
++    { key: 'type', label: 'Type', sortable: 'type' },
++    { key: 'reach', label: 'Reach', sortable: 'reach' },
++    { key: 'relationshipStatus', label: 'Status', sortable: 'relationshipStatus' },
++    { key: 'tier', label: 'Tier', sortable: 'tier' },
++    { key: 'contact', label: 'Contact' },
++  ];
++
++  const extraColumns = useMemo(() => {
++    const keys = new Set<string>();
++    partners.forEach((p) => {
++      Object.keys(p.extraFields || {}).forEach((k) => keys.add(k));
++    });
++    // omit redundant name properties
++    ['Partner Name', 'Name'].forEach((k) => keys.delete(k));
++    return Array.from(keys).sort();
++  }, [partners]);
++
++  const [columns, setColumns] = useState<Record<string, boolean>>(() => {
++    const initial: Record<string, boolean> = {};
++    baseColumns.forEach((c) => (initial[c.key] = true));
++    return initial;
++  });
++
++  useEffect(() => {
++    setColumns((prev) => {
++      const next = { ...prev };
++      let changed = false;
++      extraColumns.forEach((key) => {
++        if (next[key] === undefined) {
++          next[key] = false; // default extra columns off
++          changed = true;
++        }
++      });
++      return changed ? next : prev;
++    });
++  }, [extraColumns]);
+ 
+   const handleSort = (field: keyof Partner) => {
+     if (sortField === field) {
+@@ -53,6 +90,31 @@ export default function PartnerTable({ partners, onPartnerClick }: PartnerTableP
+ 
+   return (
+     <div className="bg-white rounded-lg shadow overflow-hidden">
++      <div className="flex flex-wrap gap-3 items-center px-4 py-3 border-b border-gray-200 text-sm">
++        <span className="font-semibold text-gray-700">Show/Hide Columns:</span>
++        {baseColumns.map(({ key, label }) => (
++          <label key={key} className="inline-flex items-center gap-1 text-gray-700">
++            <input
++              type="checkbox"
++              checked={columns[key]}
++              onChange={() => setColumns({ ...columns, [key]: !columns[key] })}
++              className="rounded border-gray-300"
++            />
++            {label}
++          </label>
++        ))}
++        {extraColumns.map((key) => (
++          <label key={key} className="inline-flex items-center gap-1 text-gray-700">
++            <input
++              type="checkbox"
++              checked={!!columns[key]}
++              onChange={() => setColumns({ ...columns, [key]: !columns[key] })}
++              className="rounded border-gray-300"
++            />
++            {key}
++          </label>
++        ))}
++      </div>
+       <div className="overflow-x-auto">
+         <table className="min-w-full divide-y divide-gray-200">
+           <thead className="bg-gray-50">
+@@ -63,33 +125,25 @@ export default function PartnerTable({ partners, onPartnerClick }: PartnerTableP
+               >
+                 Partner Name {sortField === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+               </th>
+-              <th
+-                onClick={() => handleSort('type')}
+-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+-              >
+-                Type {sortField === 'type' && (sortDirection === 'asc' ? '↑' : '↓')}
+-              </th>
+-              <th
+-                onClick={() => handleSort('reach')}
+-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+-              >
+-                Reach {sortField === 'reach' && (sortDirection === 'asc' ? '↑' : '↓')}
+-              </th>
+-              <th
+-                onClick={() => handleSort('relationshipStatus')}
+-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+-              >
+-                Status {sortField === 'relationshipStatus' && (sortDirection === 'asc' ? '↑' : '↓')}
+-              </th>
+-              <th
+-                onClick={() => handleSort('tier')}
+-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+-              >
+-                Tier {sortField === 'tier' && (sortDirection === 'asc' ? '↑' : '↓')}
+-              </th>
+-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+-                Contact
+-              </th>
++              {baseColumns.map(({ key, label, sortable }) =>
++                columns[key] ? (
++                  <th
++                    key={key}
++                    onClick={() => sortable && handleSort(sortable)}
++                    className={`px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${sortable ? 'cursor-pointer hover:bg-gray-100' : ''}`}
++                  >
++                    {label} {sortable && sortField === sortable && (sortDirection === 'asc' ? '↑' : '↓')}
++                  </th>
++                ) : null
++              )}
++              {extraColumns.map(
++                (key) =>
++                  columns[key] && (
++                    <th key={key} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
++                      {key}
++                    </th>
++                  )
++              )}
+             </tr>
+           </thead>
+           <tbody className="bg-white divide-y divide-gray-200">
+@@ -105,27 +159,45 @@ export default function PartnerTable({ partners, onPartnerClick }: PartnerTableP
+                     <div className="text-sm text-gray-500">{partner.companyName}</div>
+                   )}
+                 </td>
+-                <td className="px-6 py-4 whitespace-nowrap">
+-                  <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+-                    {partner.type || 'N/A'}
+-                  </span>
+-                </td>
+-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+-                  {formatReach(partner.reach)}
+-                </td>
+-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+-                  {partner.relationshipStatus || '—'}
+-                </td>
+-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+-                  {partner.tier || '—'}
+-                </td>
+-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+-                  <div className="flex gap-2">
+-                    {partner.hasEmail && <span>📧</span>}
+-                    {partner.website && <span>🌐</span>}
+-                    {partner.linkedin && <span>💼</span>}
+-                  </div>
+-                </td>
++                {columns.type && (
++                  <td className="px-6 py-4 whitespace-nowrap">
++                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
++                      {partner.type || 'N/A'}
++                    </span>
++                  </td>
++                )}
++                {columns.reach && (
++                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
++                    {formatReach(partner.reach)}
++                  </td>
++                )}
++                {columns.relationshipStatus && (
++                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
++                    {partner.relationshipStatus || '—'}
++                  </td>
++                )}
++                {columns.tier && (
++                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
++                    {partner.tier || '—'}
++                  </td>
++                )}
++                {columns.contact && (
++                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
++                    <div className="flex gap-2">
++                      {partner.hasEmail && <span>📧</span>}
++                      {partner.website && <span>🌐</span>}
++                      {partner.linkedin && <span>💼</span>}
++                    </div>
++                  </td>
++                )}
++                {extraColumns.map(
++                  (key) =>
++                    columns[key] && (
++                      <td key={key} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
++                        {partner.extraFields?.[key] ?? '—'}
++                      </td>
++                    )
++                )}
+               </tr>
+             ))}
+           </tbody>
+diff --git a/lib/config.ts b/lib/config.ts
+index abecef6..b8489df 100644
+--- a/lib/config.ts
++++ b/lib/config.ts
+@@ -1,11 +1,3 @@
+-// Hardcoded client list for MVP
+-export const CLIENTS = [
+-  'Client A',
+-  'Client B',
+-  'Client C',
+-  'Demo Client'
+-];
+-
+ export const PARTNER_TYPES = ['Person', 'Brand', 'Place'];
+ 
+ // Notion property names (centralized)
+diff --git a/lib/firecrawl.ts b/lib/firecrawl.ts
+index 1523545..d3d7c47 100644
+--- a/lib/firecrawl.ts
++++ b/lib/firecrawl.ts
+@@ -1,5 +1,5 @@
+-// Firecrawl API integration
+-// Note: Actual implementation depends on Firecrawl's API
++// Firecrawl API integration (thin wrapper around crawl endpoint)
++// This assumes Firecrawl returns { id, results?: [...] }. Results may be empty if crawling is async.
+ 
+ export interface CrawlRequest {
+   clientName: string;
+@@ -17,44 +17,81 @@ export interface CrawlResult {
+   inferredReach?: number;
+ }
+ 
+-export async function startCrawl(request: CrawlRequest): Promise<{ jobId: string }> {
+-  // TODO: Implement actual Firecrawl API call
+-  // This is a placeholder for the actual integration
+-  
++interface FirecrawlResponse {
++  id: string;
++  results?: Array<{
++    title?: string;
++    url?: string;
++    category?: string;
++    description?: string;
++    reach?: number;
++    partnerType?: string;
++  }>;
++}
++
++export async function startCrawl(request: CrawlRequest): Promise<{ jobId: string; results: CrawlResult[] }> {
++  if (!process.env.FIRECRAWL_API_KEY) {
++    throw new Error('Missing FIRECRAWL_API_KEY');
++  }
++
+   const response = await fetch('https://api.firecrawl.dev/v1/crawl', {
+     method: 'POST',
+     headers: {
+-      'Authorization': `Bearer ${process.env.FIRECRAWL_API_KEY}`,
++      Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+       'Content-Type': 'application/json',
+     },
+     body: JSON.stringify({
+       urls: request.seedUrls,
+-      // Additional Firecrawl configuration
++      competitorDomains: request.competitorDomains,
++      keywords: request.keywords,
+     }),
+   });
+ 
+-  const data = await response.json();
+-  return { jobId: data.id };
++  if (!response.ok) {
++    const errorText = await response.text();
++    throw new Error(`Firecrawl request failed: ${response.status} ${errorText}`);
++  }
++
++  const data = (await response.json()) as FirecrawlResponse;
++  const results =
++    data.results?.map((r) => ({
++      partnerName: r.title || r.url || 'Unknown',
++      website: r.url,
++      category: r.category,
++      notes: r.description,
++      inferredReach: r.reach,
++      partnerType: (r as any).partnerType,
++    })) || [];
++
++  return { jobId: data.id, results };
+ }
+ 
+ export async function getCrawlResults(jobId: string): Promise<CrawlResult[]> {
+-  // TODO: Implement actual Firecrawl results fetching
+-  // Parse and structure results
+-  
++  if (!process.env.FIRECRAWL_API_KEY) {
++    throw new Error('Missing FIRECRAWL_API_KEY');
++  }
++
+   const response = await fetch(`https://api.firecrawl.dev/v1/crawl/${jobId}`, {
+     headers: {
+-      'Authorization': `Bearer ${process.env.FIRECRAWL_API_KEY}`,
++      Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+     },
+   });
+ 
+-  const data = await response.json();
+-  
+-  // Transform Firecrawl results to our structure
+-  return data.results.map((result: any) => ({
+-    partnerName: result.title || 'Unknown',
+-    website: result.url,
+-    category: result.category,
+-    notes: result.description,
+-    // Additional parsing logic
+-  }));
++  if (!response.ok) {
++    const errorText = await response.text();
++    throw new Error(`Firecrawl results failed: ${response.status} ${errorText}`);
++  }
++
++  const data = (await response.json()) as FirecrawlResponse;
++
++  return (
++    data.results?.map((r) => ({
++      partnerName: r.title || r.url || 'Unknown',
++      website: r.url,
++      category: r.category,
++      notes: r.description,
++      inferredReach: r.reach,
++      partnerType: (r as any).partnerType,
++    })) || []
++  );
+ }
+diff --git a/lib/notion.ts b/lib/notion.ts
+index c6fc9cd..db6d4e2 100644
+--- a/lib/notion.ts
++++ b/lib/notion.ts
+@@ -8,57 +8,143 @@ const notion = new Client({
+ 
+ const DATABASE_ID = process.env.NOTION_DATABASE_ID!;
+ 
+-// Helper: Extract plain text from rich text
+-function getPlainText(richText?: Array<{ plain_text: string }>): string {
+-  return richText?.map(t => t.plain_text).join('') || '';
+-}
+-
+-// Helper: Extract title text
+-function getTitleText(title?: Array<{ plain_text: string }>): string {
+-  return title?.map(t => t.plain_text).join('') || '';
++// Aliases for tolerant mapping (add common variants here)
++const ALIASES = {
++  PARTNER_NAME: [NOTION_PROPERTIES.PARTNER_NAME, 'Name', 'Partner', 'Title'],
++  COMPANY_NAME: [NOTION_PROPERTIES.COMPANY_NAME, 'Company', 'Organization'],
++  PARTNER_TYPE: [NOTION_PROPERTIES.PARTNER_TYPE, 'Type', 'Partner type'],
++  CLIENT: [NOTION_PROPERTIES.CLIENT, 'Clients'],
++  WEBSITE: [NOTION_PROPERTIES.WEBSITE, 'Site', 'URL'],
++  LINKEDIN: [NOTION_PROPERTIES.LINKEDIN, 'LinkedIn URL', 'LI'],
++  EMAIL: [NOTION_PROPERTIES.EMAIL, 'Contact', 'Email Address'],
++  MORE_LINKS: [NOTION_PROPERTIES.MORE_LINKS, 'Links', 'More'],
++  LINKEDIN_FOLLOWERS: [NOTION_PROPERTIES.LINKEDIN_FOLLOWERS, 'LinkedIn Followers', 'Followers'],
++  EMAIL_SUBSCRIBERS: [NOTION_PROPERTIES.EMAIL_SUBSCRIBERS, 'Email Subscribers', 'Subscribers'],
++  REACH_NORMALIZED: [NOTION_PROPERTIES.REACH_NORMALIZED, 'Reach', 'Reach Normalized', 'Reach (Normalized)'],
++  RELATIONSHIP_STATUS: [NOTION_PROPERTIES.RELATIONSHIP_STATUS, 'Status'],
++  RELATIONSHIP_DETAIL: [NOTION_PROPERTIES.RELATIONSHIP_DETAIL, 'Relationship Detail', 'Notes'],
++  PROGRESS_STAGE: [NOTION_PROPERTIES.PROGRESS_STAGE, 'Progress', 'Stage'],
++  TIER: [NOTION_PROPERTIES.TIER, 'Priority', 'Tiering'],
++  CAMPAIGNS: [NOTION_PROPERTIES.CAMPAIGNS, 'Campaigns'],
++  CAMPAIGN_DETAIL: [NOTION_PROPERTIES.CAMPAIGN_DETAIL, 'Campaign Detail', 'Campaign Notes'],
++  PERSONA: [NOTION_PROPERTIES.PERSONA, 'Persona'],
++  CATEGORY: [NOTION_PROPERTIES.CATEGORY, 'Category', 'Vertical'],
++  DISTRO_MEDIUMS: [NOTION_PROPERTIES.DISTRO_MEDIUMS, 'Distro', 'Channels'],
++  ACTION_ITEMS: [NOTION_PROPERTIES.ACTION_ITEMS, 'Action Items', 'Actions', 'Next Steps'],
++  RATE: [NOTION_PROPERTIES.RATE, 'Rate', 'Pricing'],
++  SOURCE: [NOTION_PROPERTIES.SOURCE, 'Source'],
++} as const;
++
++const firstProp = (props: any, candidates: string[]) =>
++  candidates.map((name) => props?.[name]).find((v) => v !== undefined);
++
++const getPlainText = (richText?: Array<{ plain_text: string }>): string =>
++  richText?.map((t) => t.plain_text).join('') || '';
++
++const getTitleText = (title?: Array<{ plain_text: string }>): string =>
++  title?.map((t) => t.plain_text).join('') || '';
++
++const getNumberProp = (props: any, names: string[]): number | undefined => {
++  for (const name of names) {
++    const val = props?.[name]?.number;
++    if (typeof val === 'number') return val;
++  }
++  return undefined;
++};
++
++const getSelectName = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return prop?.select?.name;
++};
++
++const getSelectOrFirstMultiName = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return prop?.select?.name || prop?.multi_select?.[0]?.name;
++};
++
++const getMultiNames = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return prop?.multi_select?.map((s: any) => s.name) || [];
++};
++
++const getUrl = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return prop?.url;
++};
++
++const getEmail = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return prop?.email;
++};
++
++const getRichText = (props: any, names: string[]) => {
++  const prop = firstProp(props, names);
++  return getPlainText(prop?.rich_text);
++};
++
++// Generic serializer for any Notion property into displayable value
++function serializeProperty(prop: any): string | number | boolean | null {
++  if (!prop) return null;
++  if (Array.isArray(prop.title)) return getTitleText(prop.title);
++  if (Array.isArray(prop.rich_text)) return getPlainText(prop.rich_text);
++  if (prop.select?.name) return prop.select.name;
++  if (Array.isArray(prop.multi_select)) return prop.multi_select.map((s: any) => s.name).join(', ');
++  if (typeof prop.number === 'number') return prop.number;
++  if (typeof prop.checkbox === 'boolean') return prop.checkbox;
++  if (prop.url) return prop.url;
++  if (prop.email) return prop.email;
++  if (prop.date?.start) return prop.date.start;
++  return null;
+ }
+ 
+ // Transform Notion page to Partner
+ export function transformNotionPartner(page: any): Partner {
+   const props = page.properties;
++  const extraFields: Record<string, string | number | boolean | null> = {};
+ 
+-  const linkedinFollowers = props[NOTION_PROPERTIES.LINKEDIN_FOLLOWERS]?.number || 0;
+-  const emailSubscribers = props[NOTION_PROPERTIES.EMAIL_SUBSCRIBERS]?.number || 0;
+-  const reachNormalized = props[NOTION_PROPERTIES.REACH_NORMALIZED]?.number;
++  // Capture all properties as displayable values
++  Object.entries(props).forEach(([key, value]) => {
++    extraFields[key] = serializeProperty(value);
++  });
++
++  const linkedinFollowers = getNumberProp(props, ALIASES.LINKEDIN_FOLLOWERS) || 0;
++  const emailSubscribers = getNumberProp(props, ALIASES.EMAIL_SUBSCRIBERS) || 0;
++  const reachNormalized = getNumberProp(props, ALIASES.REACH_NORMALIZED);
+   
+   const reach = reachNormalized ?? (linkedinFollowers + emailSubscribers);
+ 
+-  const email = props[NOTION_PROPERTIES.EMAIL]?.email;
+-  const rate = getPlainText(props[NOTION_PROPERTIES.RATE]?.rich_text);
+-  const website = props[NOTION_PROPERTIES.WEBSITE]?.url;
+-  const moreLinks = props[NOTION_PROPERTIES.MORE_LINKS]?.url;
++  const email = getEmail(props, ALIASES.EMAIL);
++  const rate = getRichText(props, ALIASES.RATE);
++  const website = getUrl(props, ALIASES.WEBSITE);
++  const moreLinks = getUrl(props, ALIASES.MORE_LINKS);
+ 
+   return {
+     id: page.id,
+-    name: getTitleText(props[NOTION_PROPERTIES.PARTNER_NAME]?.title),
+-    companyName: getPlainText(props[NOTION_PROPERTIES.COMPANY_NAME]?.rich_text),
+-    type: props[NOTION_PROPERTIES.PARTNER_TYPE]?.select?.name as any,
+-    clients: props[NOTION_PROPERTIES.CLIENT]?.multi_select?.map((s: any) => s.name) || [],
++    name: getTitleText(firstProp(props, ALIASES.PARTNER_NAME)?.title),
++    companyName: getPlainText(firstProp(props, ALIASES.COMPANY_NAME)?.rich_text),
++    type: getSelectOrFirstMultiName(props, ALIASES.PARTNER_TYPE) as any,
++    clients: getMultiNames(props, ALIASES.CLIENT),
+     website,
+-    linkedin: props[NOTION_PROPERTIES.LINKEDIN]?.url,
++    linkedin: getUrl(props, ALIASES.LINKEDIN),
+     email,
+     moreLinks,
+     reach,
+-    relationshipStatus: props[NOTION_PROPERTIES.RELATIONSHIP_STATUS]?.select?.name,
+-    relationshipDetail: getPlainText(props[NOTION_PROPERTIES.RELATIONSHIP_DETAIL]?.rich_text),
+-    progressStage: props[NOTION_PROPERTIES.PROGRESS_STAGE]?.select?.name,
+-    tier: props[NOTION_PROPERTIES.TIER]?.select?.name,
+-    category: props[NOTION_PROPERTIES.CATEGORY]?.select?.name,
+-    persona: props[NOTION_PROPERTIES.PERSONA]?.select?.name,
+-    distroMediums: props[NOTION_PROPERTIES.DISTRO_MEDIUMS]?.multi_select?.map((s: any) => s.name) || [],
+-    campaigns: props[NOTION_PROPERTIES.CAMPAIGNS]?.multi_select?.map((s: any) => s.name) || [],
+-    campaignDetail: getPlainText(props[NOTION_PROPERTIES.CAMPAIGN_DETAIL]?.rich_text),
+-    actionItems: getPlainText(props[NOTION_PROPERTIES.ACTION_ITEMS]?.rich_text),
++    relationshipStatus: getSelectName(props, ALIASES.RELATIONSHIP_STATUS),
++    relationshipDetail: getRichText(props, ALIASES.RELATIONSHIP_DETAIL),
++    progressStage: getSelectName(props, ALIASES.PROGRESS_STAGE),
++    tier: getSelectName(props, ALIASES.TIER),
++    category: getSelectName(props, ALIASES.CATEGORY),
++    persona: getSelectName(props, ALIASES.PERSONA),
++    distroMediums: getMultiNames(props, ALIASES.DISTRO_MEDIUMS),
++    campaigns: getMultiNames(props, ALIASES.CAMPAIGNS),
++    campaignDetail: getRichText(props, ALIASES.CAMPAIGN_DETAIL),
++    actionItems: getRichText(props, ALIASES.ACTION_ITEMS),
+     rate,
+     hasEmail: !!email,
+     hasRate: !!rate,
+     hasLinks: !!(website || moreLinks),
+-    source: props[NOTION_PROPERTIES.SOURCE]?.select?.name,
++    source: getSelectName(props, ALIASES.SOURCE),
++    extraFields,
+   };
+ }
+ 
+@@ -165,6 +251,31 @@ export async function createPartner(data: {
+   return response.id;
+ }
+ 
++// List unique client names from Notion
++export async function getClientList(): Promise<string[]> {
++  const clients = new Set<string>();
++  let cursor: string | undefined;
++
++  do {
++    const response = await notion.databases.query({
++      database_id: DATABASE_ID,
++      start_cursor: cursor,
++      page_size: 100,
++    });
++
++    response.results.forEach((page: any) => {
++      const clientProps = page.properties[NOTION_PROPERTIES.CLIENT]?.multi_select || [];
++      clientProps.forEach((c: any) => {
++        if (c?.name) clients.add(c.name);
++      });
++    });
++
++    cursor = response.has_more ? response.next_cursor || undefined : undefined;
++  } while (cursor);
++
++  return Array.from(clients).sort();
++}
++
+ // Update partner (Milestone 4 - optional)
+ export async function updatePartner(pageId: string, updates: {
+   relationshipStatus?: string;
+diff --git a/lib/supabase.ts b/lib/supabase.ts
+index 8589dc5..06a14de 100644
+--- a/lib/supabase.ts
++++ b/lib/supabase.ts
+@@ -30,6 +30,23 @@ export async function createDiscovery(discovery: Omit<FirecrawlDiscovery, 'id' |
+   return data as FirecrawlDiscovery;
+ }
+ 
++// Bulk create discoveries
++export async function createDiscoveries(
++  discoveries: Array<Omit<FirecrawlDiscovery, 'id' | 'created_at' | 'status'>>
++) {
++  if (discoveries.length === 0) return [];
++
++  const payload = discoveries.map((d) => ({ ...d, status: 'pending' }));
++
++  const { data, error } = await supabase
++    .from('firecrawl_discoveries')
++    .insert(payload)
++    .select();
++
++  if (error) throw error;
++  return data as FirecrawlDiscovery[];
++}
++
+ // Update discovery status
+ export async function updateDiscoveryStatus(
+   id: string,
+diff --git a/lib/types.ts b/lib/types.ts
+index 3ae42a9..12ca192 100644
+--- a/lib/types.ts
++++ b/lib/types.ts
+@@ -55,6 +55,8 @@ export interface Partner {
+   hasRate: boolean;
+   hasLinks: boolean;
+   source?: string;
++  // Additional properties pulled from Notion (dynamic columns)
++  extraFields?: Record<string, string | number | boolean | null>;
+ }
+ 
+ export interface DashboardMetrics {

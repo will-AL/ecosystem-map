@@ -55,6 +55,8 @@ export interface Partner {
   hasRate: boolean;
   hasLinks: boolean;
   source?: string;
+  // Additional properties pulled from Notion (dynamic columns)
+  extraFields?: Record<string, string | number | boolean | null>;
 }
 
 export interface DashboardMetrics {

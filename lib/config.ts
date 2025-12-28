@@ -1,11 +1,3 @@
-// Hardcoded client list for MVP
-export const CLIENTS = [
-  'Client A',
-  'Client B',
-  'Client C',
-  'Demo Client'
-];
-
 export const PARTNER_TYPES = ['Person', 'Brand', 'Place'];
 
 // Notion property names (centralized)

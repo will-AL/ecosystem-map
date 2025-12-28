@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPartnersByClient } from '@/lib/notion';
+import { getMockPartnersByClient } from '@/lib/mockData';
+
+const useMock = () =>
+  !process.env.NOTION_API_KEY ||
+  process.env.NOTION_API_KEY === 'dummy' ||
+  process.env.NOTION_DATABASE_ID === 'dummy';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +17,11 @@ export async function GET(request: NextRequest) {
         { error: 'Client parameter is required' },
         { status: 400 }
       );
+    }
+
+    if (useMock() || client === 'Demo Client') {
+      const { partners, metrics } = getMockPartnersByClient(client);
+      return NextResponse.json({ partners, metrics, mock: true });
     }
 
     const { partners, metrics } = await getPartnersByClient(client);

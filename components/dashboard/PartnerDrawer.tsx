@@ -184,7 +184,7 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
           {/* Open in Notion */}
           {notionUrl && (
             <div className="mt-8 pt-6 border-t">
-              
+              <a
                 href={notionUrl}
                 target="_blank"
                 rel="noopener noreferrer"

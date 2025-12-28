@@ -1,5 +1,5 @@
-// Firecrawl API integration
-// Note: Actual implementation depends on Firecrawl's API
+// Firecrawl API integration (thin wrapper around crawl endpoint)
+// This assumes Firecrawl returns { id, results?: [...] }. Results may be empty if crawling is async.
 
 export interface CrawlRequest {
   clientName: string;
@@ -17,44 +17,81 @@ export interface CrawlResult {
   inferredReach?: number;
 }
 
-export async function startCrawl(request: CrawlRequest): Promise<{ jobId: string }> {
-  // TODO: Implement actual Firecrawl API call
-  // This is a placeholder for the actual integration
-  
+interface FirecrawlResponse {
+  id: string;
+  results?: Array<{
+    title?: string;
+    url?: string;
+    category?: string;
+    description?: string;
+    reach?: number;
+    partnerType?: string;
+  }>;
+}
+
+export async function startCrawl(request: CrawlRequest): Promise<{ jobId: string; results: CrawlResult[] }> {
+  if (!process.env.FIRECRAWL_API_KEY) {
+    throw new Error('Missing FIRECRAWL_API_KEY');
+  }
+
   const response = await fetch('https://api.firecrawl.dev/v1/crawl', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+      Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       urls: request.seedUrls,
-      // Additional Firecrawl configuration
+      competitorDomains: request.competitorDomains,
+      keywords: request.keywords,
     }),
   });
 
-  const data = await response.json();
-  return { jobId: data.id };
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Firecrawl request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as FirecrawlResponse;
+  const results =
+    data.results?.map((r) => ({
+      partnerName: r.title || r.url || 'Unknown',
+      website: r.url,
+      category: r.category,
+      notes: r.description,
+      inferredReach: r.reach,
+      partnerType: (r as any).partnerType,
+    })) || [];
+
+  return { jobId: data.id, results };
 }
 
 export async function getCrawlResults(jobId: string): Promise<CrawlResult[]> {
-  // TODO: Implement actual Firecrawl results fetching
-  // Parse and structure results
-  
+  if (!process.env.FIRECRAWL_API_KEY) {
+    throw new Error('Missing FIRECRAWL_API_KEY');
+  }
+
   const response = await fetch(`https://api.firecrawl.dev/v1/crawl/${jobId}`, {
     headers: {
-      'Authorization': `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+      Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
     },
   });
 
-  const data = await response.json();
-  
-  // Transform Firecrawl results to our structure
-  return data.results.map((result: any) => ({
-    partnerName: result.title || 'Unknown',
-    website: result.url,
-    category: result.category,
-    notes: result.description,
-    // Additional parsing logic
-  }));
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Firecrawl results failed: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as FirecrawlResponse;
+
+  return (
+    data.results?.map((r) => ({
+      partnerName: r.title || r.url || 'Unknown',
+      website: r.url,
+      category: r.category,
+      notes: r.description,
+      inferredReach: r.reach,
+      partnerType: (r as any).partnerType,
+    })) || []
+  );
 }

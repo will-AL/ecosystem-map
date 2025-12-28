@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, updateDiscoveryStatus } from '@/lib/supabase';
 import { createPartner } from '@/lib/notion';
+import { mockDiscoveries } from '@/lib/mockData';
+
+const useMock = () =>
+  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://localhost' ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'dummy' ||
+  process.env.NOTION_API_KEY === 'dummy';
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,6 +18,18 @@ export async function POST(request: NextRequest) {
         { error: 'Discovery IDs array is required' },
         { status: 400 }
       );
+    }
+
+    if (useMock()) {
+      const created = [];
+      for (const id of discoveryIds) {
+        const discovery = mockDiscoveries.find(d => d.id === id);
+        if (!discovery) continue;
+        discovery.status = 'approved';
+        discovery.notion_page_id = discovery.id;
+        created.push({ discoveryId: discovery.id, notionPageId: discovery.id });
+      }
+      return NextResponse.json({ created, mock: true });
     }
 
     // Fetch discoveries

@@ -30,6 +30,23 @@ export async function createDiscovery(discovery: Omit<FirecrawlDiscovery, 'id' |
   return data as FirecrawlDiscovery;
 }
 
+// Bulk create discoveries
+export async function createDiscoveries(
+  discoveries: Array<Omit<FirecrawlDiscovery, 'id' | 'created_at' | 'status'>>
+) {
+  if (discoveries.length === 0) return [];
+
+  const payload = discoveries.map((d) => ({ ...d, status: 'pending' }));
+
+  const { data, error } = await supabase
+    .from('firecrawl_discoveries')
+    .insert(payload)
+    .select();
+
+  if (error) throw error;
+  return data as FirecrawlDiscovery[];
+}
+
 // Update discovery status
 export async function updateDiscoveryStatus(
   id: string,

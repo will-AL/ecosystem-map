@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CLIENTS } from '@/lib/config';
 import { FirecrawlDiscovery } from '@/lib/types';
 import Link from 'next/link';
 
@@ -14,6 +13,26 @@ export default function DiscoveryPage() {
   const [discoveries, setDiscoveries] = useState<FirecrawlDiscovery[]>([]);
   const [selectedDiscoveries, setSelectedDiscoveries] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [clients, setClients] = useState<string[]>(['Demo Client']);
+  const [clientsLoading, setClientsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadClients = async () => {
+      try {
+        const res = await fetch('/api/clients');
+        const data = await res.json();
+        if (res.ok && Array.isArray(data.clients)) {
+          setClients(data.clients);
+        }
+      } catch (error) {
+        console.error('Failed to load clients:', error);
+      } finally {
+        setClientsLoading(false);
+      }
+    };
+
+    loadClients();
+  }, []);
 
   useEffect(() => {
     if (selectedClient) {
@@ -146,9 +165,10 @@ export default function DiscoveryPage() {
             value={selectedClient}
             onChange={(e) => setSelectedClient(e.target.value)}
             className="block w-full max-w-xs px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            disabled={clientsLoading}
           >
-            <option value="">Choose a client...</option>
-            {CLIENTS.map((client) => (
+            <option value="">{clientsLoading ? 'Loading clients...' : 'Choose a client...'}</option>
+            {clients.map((client) => (
               <option key={client} value={client}>
                 {client}
               </option>
@@ -251,7 +271,7 @@ export default function DiscoveryPage() {
                         <div className="flex-1">
                           <h3 className="font-semibold text-lg">{discovery.partner_name}</h3>
                           {discovery.website && (
-                            
+                            <a
                               href={discovery.website}
                               target="_blank"
                               rel="noopener noreferrer"
