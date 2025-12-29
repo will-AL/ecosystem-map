@@ -47,6 +47,10 @@ export interface Partner {
   category?: string;
   persona?: string;
   distroMediums: string[];
+   // Media properties / channels (e.g., LinkedIn, Newsletter)
+  mediaProperties?: string[];
+  subTypes?: string[];
+  subType?: string; // legacy single; keep for compatibility
   campaigns: string[];
   campaignDetail?: string;
   actionItems?: string;
@@ -92,9 +96,16 @@ export interface PartnerFilters {
   category?: string[];
   tier?: string[];
   distroMediums?: string[];
+  mediaProperties?: string[];
   minReach?: number;
   hasEmail?: boolean;
   hasRate?: boolean;
   hasLinks?: boolean;
   search?: string;
+}
+
+export interface DashboardView {
+  id: string;
+  name: string;
+  filters: PartnerFilters;
 }

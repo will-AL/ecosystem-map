@@ -54,6 +54,14 @@ export function applyFilters(partners: Partner[], filters: PartnerFilters): Part
     );
   }
 
+  // Media Properties (falls back to distroMediums)
+  if (filters.mediaProperties && filters.mediaProperties.length > 0) {
+    filtered = filtered.filter(p => {
+      const props = p.mediaProperties && p.mediaProperties.length > 0 ? p.mediaProperties : p.distroMediums;
+      return props.some((prop) => filters.mediaProperties!.includes(prop));
+    });
+  }
+
   // Min Reach
   if (filters.minReach) {
     filtered = filtered.filter(p => p.reach >= filters.minReach!);

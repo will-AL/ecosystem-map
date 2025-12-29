@@ -21,7 +21,7 @@ const ALIASES = {
   LINKEDIN_FOLLOWERS: [NOTION_PROPERTIES.LINKEDIN_FOLLOWERS, 'LinkedIn Followers', 'Followers'],
   EMAIL_SUBSCRIBERS: [NOTION_PROPERTIES.EMAIL_SUBSCRIBERS, 'Email Subscribers', 'Subscribers'],
   REACH_NORMALIZED: [NOTION_PROPERTIES.REACH_NORMALIZED, 'Reach', 'Reach Normalized', 'Reach (Normalized)'],
-  RELATIONSHIP_STATUS: [NOTION_PROPERTIES.RELATIONSHIP_STATUS, 'Status'],
+  RELATIONSHIP_STATUS: [NOTION_PROPERTIES.RELATIONSHIP_STATUS, 'Status', 'status', 'Relationship status'],
   RELATIONSHIP_DETAIL: [NOTION_PROPERTIES.RELATIONSHIP_DETAIL, 'Relationship Detail', 'Notes'],
   PROGRESS_STAGE: [NOTION_PROPERTIES.PROGRESS_STAGE, 'Progress', 'Stage'],
   TIER: [NOTION_PROPERTIES.TIER, 'Priority', 'Tiering'],
@@ -33,9 +33,11 @@ const ALIASES = {
   ACTION_ITEMS: [NOTION_PROPERTIES.ACTION_ITEMS, 'Action Items', 'Actions', 'Next Steps'],
   RATE: [NOTION_PROPERTIES.RATE, 'Rate', 'Pricing'],
   SOURCE: [NOTION_PROPERTIES.SOURCE, 'Source'],
+  SUB_TYPE: ['Sub Type', 'Subtype', 'SubType', 'Sub-Type'],
+  MEDIA_PROPERTIES: ['Properties', 'Media Properties', 'Channels'],
 } as const;
 
-const firstProp = (props: any, candidates: string[]) =>
+const firstProp = (props: any, candidates: readonly string[]) =>
   candidates.map((name) => props?.[name]).find((v) => v !== undefined);
 
 const getPlainText = (richText?: Array<{ plain_text: string }>): string =>
@@ -44,7 +46,7 @@ const getPlainText = (richText?: Array<{ plain_text: string }>): string =>
 const getTitleText = (title?: Array<{ plain_text: string }>): string =>
   title?.map((t) => t.plain_text).join('') || '';
 
-const getNumberProp = (props: any, names: string[]): number | undefined => {
+const getNumberProp = (props: any, names: readonly string[]): number | undefined => {
   for (const name of names) {
     const val = props?.[name]?.number;
     if (typeof val === 'number') return val;
@@ -52,32 +54,52 @@ const getNumberProp = (props: any, names: string[]): number | undefined => {
   return undefined;
 };
 
-const getSelectName = (props: any, names: string[]) => {
+const getSelectName = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return prop?.select?.name;
 };
 
-const getSelectOrFirstMultiName = (props: any, names: string[]) => {
+// Normalize relationship status values coming from Notion (tolerant to casing/whitespace)
+const normalizeStatus = (status?: string) => {
+  if (!status) return status;
+  const lower = status.trim().toLowerCase();
+  if (lower === 'done' || lower === 'engaged' || lower === 'active') return 'Active';
+  if (lower === 'in progress' || lower === 'prospect' || lower === 'working') return 'Prospect';
+  if (lower === 'not started' || lower === 'todo' || lower === 'backlog') return undefined; // hide
+  if (lower === 'disqualified' || lower === 'dormant') return 'Disqualified';
+  return status;
+};
+
+const getSelectOrFirstMultiName = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return prop?.select?.name || prop?.multi_select?.[0]?.name;
 };
 
-const getMultiNames = (props: any, names: string[]) => {
+const normalizeType = (type?: string) => {
+  if (!type) return type;
+  const lower = type.toLowerCase();
+  if (lower === 'people' || lower === 'person') return 'Person';
+  if (lower === 'brand') return 'Brand';
+  if (lower === 'place') return 'Place';
+  return type;
+};
+
+const getMultiNames = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return prop?.multi_select?.map((s: any) => s.name) || [];
 };
 
-const getUrl = (props: any, names: string[]) => {
+const getUrl = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return prop?.url;
 };
 
-const getEmail = (props: any, names: string[]) => {
+const getEmail = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return prop?.email;
 };
 
-const getRichText = (props: any, names: string[]) => {
+const getRichText = (props: any, names: readonly string[]) => {
   const prop = firstProp(props, names);
   return getPlainText(prop?.rich_text);
 };
@@ -117,25 +139,37 @@ export function transformNotionPartner(page: any): Partner {
   const rate = getRichText(props, ALIASES.RATE);
   const website = getUrl(props, ALIASES.WEBSITE);
   const moreLinks = getUrl(props, ALIASES.MORE_LINKS);
+  const subTypes = getMultiNames(props, ALIASES.SUB_TYPE);
+  const subType = getSelectOrFirstMultiName(props, ALIASES.SUB_TYPE);
+  const mediaProperties = getMultiNames(props, ALIASES.MEDIA_PROPERTIES);
+  // Relationship status: try select/multi-select, then fall back to captured extra field strings
+  const rawStatus =
+    getSelectOrFirstMultiName(props, ALIASES.RELATIONSHIP_STATUS) ||
+    ALIASES.RELATIONSHIP_STATUS.map((name) => extraFields[name])
+      .find((val) => typeof val === 'string') as string | undefined;
+  const normalizedStatus = normalizeStatus(rawStatus);
 
   return {
     id: page.id,
     name: getTitleText(firstProp(props, ALIASES.PARTNER_NAME)?.title),
     companyName: getPlainText(firstProp(props, ALIASES.COMPANY_NAME)?.rich_text),
-    type: getSelectOrFirstMultiName(props, ALIASES.PARTNER_TYPE) as any,
+    type: normalizeType(getSelectOrFirstMultiName(props, ALIASES.PARTNER_TYPE)) as any,
     clients: getMultiNames(props, ALIASES.CLIENT),
     website,
     linkedin: getUrl(props, ALIASES.LINKEDIN),
     email,
     moreLinks,
     reach,
-    relationshipStatus: getSelectName(props, ALIASES.RELATIONSHIP_STATUS),
+    relationshipStatus: normalizedStatus,
     relationshipDetail: getRichText(props, ALIASES.RELATIONSHIP_DETAIL),
     progressStage: getSelectName(props, ALIASES.PROGRESS_STAGE),
     tier: getSelectName(props, ALIASES.TIER),
     category: getSelectName(props, ALIASES.CATEGORY),
     persona: getSelectName(props, ALIASES.PERSONA),
     distroMediums: getMultiNames(props, ALIASES.DISTRO_MEDIUMS),
+    mediaProperties: mediaProperties.length ? mediaProperties : undefined,
+    subTypes: subTypes.length ? subTypes : subType ? [subType] : undefined,
+    subType: subType || (subTypes.length ? subTypes[0] : undefined),
     campaigns: getMultiNames(props, ALIASES.CAMPAIGNS),
     campaignDetail: getRichText(props, ALIASES.CAMPAIGN_DETAIL),
     actionItems: getRichText(props, ALIASES.ACTION_ITEMS),
@@ -158,7 +192,9 @@ function computeMetrics(partners: Partner[]): DashboardMetrics {
   return {
     totalPartners: partners.length,
     engagedPartners: partners.filter(isEngaged).length,
-    totalReach: partners.reduce((sum, p) => sum + p.reach, 0),
+    totalReach: partners
+      .filter((p) => p.relationshipStatus === 'Active')
+      .reduce((sum, p) => sum + p.reach, 0),
     byType: {
       Person: partners.filter(p => p.type === 'Person').length,
       Brand: partners.filter(p => p.type === 'Brand').length,

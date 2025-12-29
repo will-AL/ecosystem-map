@@ -27,6 +27,9 @@ const basePartners: Partner[] = [
     hasRate: true,
     hasLinks: true,
     source: 'Manual',
+    mediaProperties: ['LinkedIn', 'Newsletter'],
+    subTypes: ['Creator', 'Influencer'],
+    subType: 'Creator',
     extraFields: {},
   },
   {
@@ -53,6 +56,9 @@ const basePartners: Partner[] = [
     hasRate: false,
     hasLinks: true,
     source: 'Firecrawl',
+    mediaProperties: ['Podcast', 'YouTube'],
+    subTypes: ['Publisher'],
+    subType: 'Publisher',
     extraFields: {},
   },
   {
@@ -64,7 +70,7 @@ const basePartners: Partner[] = [
     website: 'https://betahub.example.com',
     linkedin: '',
     reach: 80000,
-    relationshipStatus: 'Dormant',
+    relationshipStatus: 'Disqualified',
     relationshipDetail: '',
     progressStage: 'Not started',
     tier: 'C',
@@ -79,6 +85,9 @@ const basePartners: Partner[] = [
     hasRate: false,
     hasLinks: true,
     source: 'Manual',
+    mediaProperties: ['Events'],
+    subTypes: ['Venue'],
+    subType: 'Venue',
     extraFields: {},
   },
 ];
@@ -87,7 +96,9 @@ function computeMetrics(partners: Partner[]): DashboardMetrics {
   return {
     totalPartners: partners.length,
     engagedPartners: partners.filter(p => !!(p.relationshipStatus || p.progressStage)).length,
-    totalReach: partners.reduce((sum, p) => sum + p.reach, 0),
+    totalReach: partners
+      .filter(p => p.relationshipStatus === 'Active')
+      .reduce((sum, p) => sum + p.reach, 0),
     byType: {
       Person: partners.filter(p => p.type === 'Person').length,
       Brand: partners.filter(p => p.type === 'Brand').length,

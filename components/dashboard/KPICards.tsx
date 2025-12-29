@@ -9,44 +9,34 @@ interface KPICardsProps {
 }
 
 export default function KPICards({ metrics, loading }: KPICardsProps) {
-  if (loading) {
-    return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="bg-white p-6 rounded-lg shadow animate-pulse">
-            <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
-            <div className="h-8 bg-gray-200 rounded w-3/4"></div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (!metrics) return null;
+  if (loading || !metrics) return null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-sm font-medium text-gray-500 mb-2">Total Partners</h3>
-        <p className="text-3xl font-bold text-gray-900">{formatNumber(metrics.totalPartners)}</p>
+    <div className="flex flex-wrap gap-x-12 gap-y-6">
+      <div>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">Total Partners</h3>
+        <p className="text-2xl font-semibold text-[var(--text)]">{formatNumber(metrics.totalPartners)}</p>
       </div>
-
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-sm font-medium text-gray-500 mb-2">Engaged Partners</h3>
-        <p className="text-3xl font-bold text-blue-600">{formatNumber(metrics.engagedPartners)}</p>
+      <div>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">Engaged</h3>
+        <p className="text-2xl font-semibold text-[var(--accent)]">{formatNumber(metrics.engagedPartners)}</p>
       </div>
-
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-sm font-medium text-gray-500 mb-2">Total Reach</h3>
-        <p className="text-3xl font-bold text-green-600">{formatReach(metrics.totalReach)}</p>
+      <div>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">Total Reach</h3>
+        <p className="text-2xl font-semibold text-[var(--text)]">{formatReach(metrics.totalReach)}</p>
       </div>
-
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-sm font-medium text-gray-500 mb-2">By Type</h3>
-        <div className="text-sm text-gray-700">
-          <div>People: {metrics.byType.Person}</div>
-          <div>Brands: {metrics.byType.Brand}</div>
-          <div>Places: {metrics.byType.Place}</div>
+      <div className="flex gap-8">
+        <div>
+          <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">People</h3>
+          <p className="text-lg font-medium text-[var(--text)]">{metrics.byType.Person}</p>
+        </div>
+        <div>
+          <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">Brands</h3>
+          <p className="text-lg font-medium text-[var(--text)]">{metrics.byType.Brand}</p>
+        </div>
+        <div>
+          <h3 className="text-[11px] uppercase tracking-wider font-semibold text-[var(--muted)] mb-1">Places</h3>
+          <p className="text-lg font-medium text-[var(--text)]">{metrics.byType.Place}</p>
         </div>
       </div>
     </div>

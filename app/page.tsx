@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import ClientSelector from '@/components/dashboard/ClientSelector';
 import KPICards from '@/components/dashboard/KPICards';
 import FilterPanel from '@/components/dashboard/FilterPanel';
-import PartnerTable from '@/components/dashboard/PartnerTable';
+import PartnerTable, { PartnerTableHandle } from '@/components/dashboard/PartnerTable';
 import PartnerDrawer from '@/components/dashboard/PartnerDrawer';
-import { Partner, DashboardMetrics, PartnerFilters } from '@/lib/types';
+import InsightsPanel from '@/components/dashboard/InsightsPanel';
+import ViewSelector from '@/components/dashboard/ViewSelector';
+import { Partner, DashboardMetrics, PartnerFilters, DashboardView } from '@/lib/types';
 import { applyFilters } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -16,14 +18,58 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState<PartnerFilters>({});
+  const [showInsights, setShowInsights] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
   const [selectedPartnerNotionUrl, setSelectedPartnerNotionUrl] = useState<string>('');
+  const DEFAULT_VIEW: DashboardView = { id: 'all-partners', name: 'All Partners', filters: {} };
+  const [views, setViews] = useState<DashboardView[]>([DEFAULT_VIEW]);
+  const [activeViewId, setActiveViewId] = useState<string>('all-partners');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const tableRef = useRef<PartnerTableHandle>(null);
 
   useEffect(() => {
     if (selectedClient) {
       fetchPartners();
     }
   }, [selectedClient]);
+
+  // Load saved views
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('partnerDashboardViews');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length) {
+          setViews(parsed);
+          setActiveViewId(parsed[0].id);
+          setFilters(parsed[0].filters || {});
+        }
+      } catch (e) {
+        console.error('Failed to parse saved views', e);
+      }
+    }
+  }, []);
+
+  // Persist views
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('partnerDashboardViews', JSON.stringify(views));
+  }, [views]);
+
+  // Global key handling: Esc closes drawer and returns focus to table row
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedPartner) {
+        e.preventDefault();
+        setSelectedPartner(null);
+        setSelectedPartnerNotionUrl('');
+        requestAnimationFrame(() => tableRef.current?.focusActiveRow());
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedPartner]);
 
   const fetchPartners = async () => {
     setLoading(true);
@@ -36,11 +82,9 @@ export default function DashboardPage() {
         setMetrics(data.metrics);
       } else {
         console.error('Error fetching partners:', data.error);
-        alert('Failed to load partners');
       }
     } catch (error) {
       console.error('Error fetching partners:', error);
-      alert('Failed to load partners');
     } finally {
       setLoading(false);
     }
@@ -65,30 +109,124 @@ export default function DashboardPage() {
 
   const filteredPartners = applyFilters(allPartners, filters);
 
+  const updateActiveView = (updates: Partial<DashboardView>) => {
+    setViews((prev) =>
+      prev.map((v) => (v.id === activeViewId ? { ...v, ...updates, filters: filters } : v))
+    );
+  };
+
+  const handleViewChange = (viewId: string) => {
+    setActiveViewId(viewId);
+    const target = views.find((v) => v.id === viewId);
+    if (target?.filters) setFilters(target.filters);
+  };
+
+  const handleSaveAsNew = (name: string) => {
+    const newView: DashboardView = {
+      id: `${name.toLowerCase().replace(/\\s+/g, '-')}-${Date.now()}`,
+      name,
+      filters,
+    };
+    setViews((prev) => [...prev, newView]);
+    setActiveViewId(newView.id);
+  };
+
+  const handleDeleteView = (viewId: string) => {
+    setViews((prev) => {
+      const remaining = prev.filter((v) => v.id !== viewId);
+      if (!remaining.length) return [DEFAULT_VIEW];
+      if (activeViewId === viewId) {
+        setActiveViewId(remaining[0].id);
+        setFilters(remaining[0].filters || {});
+      }
+      return remaining;
+    });
+  };
+
+  const handleRenameView = (viewId: string, newName: string) => {
+    setViews((prev) => prev.map((v) => (v.id === viewId ? { ...v, name: newName } : v)));
+  };
+
+  const handleDuplicateView = (viewId: string) => {
+    const src = views.find((v) => v.id === viewId);
+    if (!src) return;
+    const dup: DashboardView = {
+      ...src,
+      id: `${src.id}-copy-${Date.now()}`,
+      name: `${src.name} Copy`,
+    };
+    setViews((prev) => [...prev, dup]);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex justify-between items-center mb-8">
+    <div className="dashboardShell" data-theme="light">
+      <div className="max-w-7xl mx-auto px-6 py-12">
+        <div className="flex justify-between items-end mb-10">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Partner Intelligence Dashboard</h1>
-            <p className="text-gray-600 mt-2">Manage and track partner relationships</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-semibold text-[var(--muted)] mb-2">
+              Partner Intelligence
+            </p>
+            <h1 className="text-4xl font-bold text-[var(--text)] tracking-tight">Intelligence Briefing</h1>
+            <p className="text-[var(--muted)] mt-2 font-medium">Global ecosystem mapping & partner performance</p>
           </div>
-          <Link
-            href="/discovery"
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-          >
-            Partner Discovery
-          </Link>
+          <div className="flex items-center gap-3">
+            <ViewSelector
+              views={views}
+              activeViewId={activeViewId}
+              onViewChange={handleViewChange}
+              onSaveView={updateActiveView}
+              onSaveAsNew={handleSaveAsNew}
+              onDeleteView={handleDeleteView}
+              onRenameView={handleRenameView}
+              onDuplicateView={handleDuplicateView}
+            />
+            <Link
+              href={selectedClient ? `/briefing?client=${encodeURIComponent(selectedClient)}` : '#'}
+              target={selectedClient ? '_blank' : undefined}
+              aria-disabled={!selectedClient}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg border transition-all ${
+                selectedClient
+                  ? 'bg-[var(--surface)] text-[var(--accent)] border-[var(--accent)] hover:bg-[var(--accentSoft)]'
+                  : 'bg-[var(--surface2)] text-[var(--muted)] border-[var(--border)] cursor-not-allowed'
+              }`}
+            >
+              Client View
+            </Link>
+            <Link
+              href="/discovery"
+              className="px-5 py-2.5 bg-[var(--accent)] text-white text-sm font-semibold rounded-lg hover:bg-[var(--accent2)] transition-all shadow-lg shadow-[var(--accentSoft)]"
+            >
+              Discover Partners
+            </Link>
+          </div>
         </div>
 
-        <ClientSelector
-          selectedClient={selectedClient}
-          onClientChange={setSelectedClient}
-        />
+        <div className="mb-10">
+          <ClientSelector
+            selectedClient={selectedClient}
+            onClientChange={setSelectedClient}
+          />
+        </div>
 
         {selectedClient && (
-          <>
-            <KPICards metrics={metrics} loading={loading} />
+          <div className="animate-in fade-in duration-500">
+            <div className="flex justify-between items-center mb-4">
+              <KPICards metrics={metrics} loading={loading} />
+              {!loading && allPartners.length > 0 && (
+                <button
+                  onClick={() => setShowInsights(!showInsights)}
+                  className={`px-4 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
+                    showInsights
+                      ? 'bg-[var(--accent)] text-white shadow-lg shadow-[var(--accentSoft)]'
+                      : 'bg-[var(--surface)] text-[var(--muted)] border border-[var(--border)]'
+                  }`}
+                >
+                  {showInsights ? 'Hide Insights' : 'Show Insights'}
+                </button>
+              )}
+            </div>
+
+            {showInsights && <InsightsPanel partners={filteredPartners} />}
 
             {!loading && allPartners.length > 0 && (
               <>
@@ -96,30 +234,33 @@ export default function DashboardPage() {
                   partners={allPartners}
                   filters={filters}
                   onFiltersChange={setFilters}
+                  searchInputRef={searchInputRef}
                 />
 
-                <div className="mb-4 text-sm text-gray-600">
+                <div className="mb-4 text-sm text-[var(--muted)]">
                   Showing {filteredPartners.length} of {allPartners.length} partners
                 </div>
 
                 <PartnerTable
                   partners={filteredPartners}
                   onPartnerClick={handlePartnerClick}
+                  searchInputRef={searchInputRef}
+                  ref={tableRef}
                 />
               </>
             )}
 
             {!loading && allPartners.length === 0 && (
-              <div className="bg-white p-8 rounded-lg shadow text-center text-gray-500">
+              <div className="bg-[var(--surface)] p-8 rounded-lg shadow text-center text-[var(--muted)] border border-[var(--border)]">
                 No partners found for this client. Add partners in Notion to get started.
               </div>
             )}
-          </>
+          </div>
         )}
 
         {!selectedClient && (
-          <div className="bg-white p-12 rounded-lg shadow text-center">
-            <p className="text-gray-500 text-lg">Select a client to view their partner dashboard</p>
+          <div className="bg-[var(--surface)] p-12 rounded-lg shadow text-center border border-[var(--border)]">
+            <p className="text-[var(--muted)] text-lg">Select a client to view their partner dashboard</p>
           </div>
         )}
 
