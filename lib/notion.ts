@@ -191,7 +191,8 @@ function isEngaged(partner: Partner): boolean {
 function computeMetrics(partners: Partner[]): DashboardMetrics {
   return {
     totalPartners: partners.length,
-    engagedPartners: partners.filter(isEngaged).length,
+    // Engaged = status explicitly Active
+    engagedPartners: partners.filter((p) => p.relationshipStatus === 'Active').length,
     totalReach: partners
       .filter((p) => p.relationshipStatus === 'Active')
       .reduce((sum, p) => sum + p.reach, 0),

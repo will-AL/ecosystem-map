@@ -10,6 +10,7 @@ import InsightsPanel from '@/components/dashboard/InsightsPanel';
 import ViewSelector from '@/components/dashboard/ViewSelector';
 import { Partner, DashboardMetrics, PartnerFilters, DashboardView } from '@/lib/types';
 import { applyFilters } from '@/lib/utils';
+import RunSummary from '@/components/dashboard/RunSummary';
 import Link from 'next/link';
 
 export default function DashboardPage() {
@@ -21,6 +22,8 @@ export default function DashboardPage() {
   const [showInsights, setShowInsights] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
   const [selectedPartnerNotionUrl, setSelectedPartnerNotionUrl] = useState<string>('');
+  const [runSummary, setRunSummary] = useState<any>(null);
+  const [runTrace, setRunTrace] = useState<any>(null);
   const DEFAULT_VIEW: DashboardView = { id: 'all-partners', name: 'All Partners', filters: {} };
   const [views, setViews] = useState<DashboardView[]>([DEFAULT_VIEW]);
   const [activeViewId, setActiveViewId] = useState<string>('all-partners');
@@ -30,6 +33,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (selectedClient) {
       fetchPartners();
+      fetchRunSummary();
     }
   }, [selectedClient]);
 
@@ -108,6 +112,40 @@ export default function DashboardPage() {
   };
 
   const filteredPartners = applyFilters(allPartners, filters);
+
+  const fetchRunSummary = async () => {
+    if (!selectedClient) return;
+    try {
+      const res = await fetch(`/api/firecrawl/jobs?client=${encodeURIComponent(selectedClient)}`);
+      const data = await res.json();
+      if (res.ok && data.job) {
+        const trace = data.job.trace || [];
+        const summary = extractSummary(trace);
+        setRunSummary(summary);
+        setRunTrace(trace);
+      } else {
+        setRunSummary(null);
+        setRunTrace(null);
+      }
+    } catch {
+      setRunSummary(null);
+      setRunTrace(null);
+    }
+  };
+
+  const extractSummary = (trace: any[]) => {
+    if (!Array.isArray(trace)) return null;
+    const extractInfo = trace.find((t) => t.step === 'extract_summary')?.info || {};
+    const mapInfo = trace.find((t) => t.step === 'map')?.info || {};
+    return {
+      terminationReason: extractInfo.terminationReason,
+      finalPartnerCount: extractInfo.finalPartnerCount,
+      shortlistedCount: (mapInfo.shortlistedDirectoryUrls || []).length,
+      extractedCount: (extractInfo.extractedUrls || []).length,
+      dedupeDroppedCount: extractInfo.dedupeDroppedCount,
+      agenticRan: extractInfo.agenticRan,
+    };
+  };
 
   const updateActiveView = (updates: Partial<DashboardView>) => {
     setViews((prev) =>
@@ -227,6 +265,8 @@ export default function DashboardPage() {
             </div>
 
             {showInsights && <InsightsPanel partners={filteredPartners} />}
+
+            <RunSummary summary={runSummary} trace={runTrace} />
 
             {!loading && allPartners.length > 0 && (
               <>

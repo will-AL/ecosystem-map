@@ -127,32 +127,24 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
             <h3 className="text-[11px] font-bold text-[var(--muted)] uppercase tracking-widest mb-3">Context</h3>
             <div className="grid grid-cols-2 gap-6 text-sm text-[var(--text)]">
               <div>
-                <div className="text-[var(--muted)]">Persona</div>
+                <div className="text-[var(--muted)]">Type</div>
                 <div className="font-medium">
-                  {partner.persona ? (
-                    <span className={`px-2 py-1 rounded-full text-xs font-semibold bg-[var(--accentSoft)] text-[var(--accent)]`}>
-                      {partner.persona}
-                    </span>
+                  {partner.type ? (
+                    (() => {
+                      const { bg, text } = getTagColors(partner.type);
+                      return (
+                        <span
+                          className="px-2 py-1 rounded-full text-xs font-semibold"
+                          style={{ backgroundColor: bg, color: text }}
+                        >
+                          {partner.type}
+                        </span>
+                      );
+                    })()
                   ) : (
                     '—'
                   )}
                 </div>
-              </div>
-              <div>
-                <div className="text-[var(--muted)]">Category</div>
-                <div className="font-medium">
-                  {partner.category ? (
-                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${getTagBadgeClasses(partner.category)}`}>
-                      {partner.category}
-                    </span>
-                  ) : (
-                    '—'
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-[var(--muted)]">Progress</div>
-                <div className="font-medium">{partner.progressStage || '—'}</div>
               </div>
               <div>
                 <div className="text-[var(--muted)]">Sub Type</div>
@@ -160,7 +152,16 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
                   <div className="flex flex-wrap gap-2">
                     {(partner.subTypes && partner.subTypes.length > 0) || partner.subType ? (
                       (partner.subTypes && partner.subTypes.length > 0 ? partner.subTypes : [partner.subType!]).map((sub) => {
-                        const { bg, text } = getTagColors(sub);
+                        const t = partner.type?.toLowerCase();
+                        const color =
+                          t === 'person'
+                            ? { bg: '#ede9fe', text: '#7c3aed' }
+                            : t === 'brand'
+                            ? { bg: '#fce7f3', text: '#db2777' }
+                            : t === 'place'
+                            ? { bg: '#fef3c7', text: '#c2410c' }
+                            : getTagColors(sub);
+                        const { bg, text } = color;
                         return (
                           <span
                             key={sub}
@@ -176,6 +177,10 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
                     )}
                   </div>
                 </div>
+              </div>
+              <div>
+                <div className="text-[var(--muted)]">Status</div>
+                <div className="font-medium">{partner.relationshipStatus || '—'}</div>
               </div>
               <div>
                 <div className="text-[var(--muted)]">Properties</div>
@@ -199,14 +204,6 @@ export default function PartnerDrawer({ partner, notionUrl, onClose }: PartnerDr
                 </div>
               </div>
             </div>
-            {partner.relationshipDetail && (
-              <p className="mt-4 text-sm text-[var(--text)] whitespace-pre-wrap">{partner.relationshipDetail}</p>
-            )}
-            {partner.actionItems && (
-              <p className="mt-2 text-sm text-[var(--text)] bg-[var(--accentSoft)] border border-[var(--border)] rounded-lg p-3 whitespace-pre-wrap">
-                {partner.actionItems}
-              </p>
-            )}
           </section>
 
           {/* Notes */}

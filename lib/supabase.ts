@@ -1,10 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 import { FirecrawlDiscovery } from './types';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// Client-safe key (anon)
+export const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// Server-side service role key for writes
+export const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.log('Supabase not configured – running in demo mode');
+}
+
+// Use service role for all server-side inserts/updates; throw if missing on call
+export const supabase = supabaseUrl && supabaseServiceRoleKey
+  ? createClient(supabaseUrl, supabaseServiceRoleKey)
+  : null;
 
 // Get discoveries for a client
 export async function getDiscoveriesByClient(clientName: string) {
@@ -69,4 +79,51 @@ export async function bulkApproveDiscoveries(ids: string[]) {
     .in('id', ids);
 
   if (error) throw error;
+}
+
+// Partner job persistence
+export interface FirecrawlPartnerJobRow {
+  id: string;
+  client_name: string;
+  seed_url: string;
+  mode: string;
+  status: 'running' | 'complete' | 'failed';
+  config: any;
+  trace: any;
+  partner_count: number;
+  termination_reason?: string | null;
+  created_at: string;
+}
+
+export async function createPartnerJob(row: Omit<FirecrawlPartnerJobRow, 'id' | 'created_at'>) {
+  const { data, error } = await supabase
+    .from('firecrawl_partner_jobs')
+    .insert([{ ...row, partner_count: row.partner_count ?? 0 }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data as FirecrawlPartnerJobRow;
+}
+
+export async function updatePartnerJob(id: string, updates: Partial<FirecrawlPartnerJobRow>) {
+  const { data, error } = await supabase
+    .from('firecrawl_partner_jobs')
+    .update(updates)
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data as FirecrawlPartnerJobRow;
+}
+
+export async function getLatestPartnerJob(clientName: string) {
+  const { data, error } = await supabase
+    .from('firecrawl_partner_jobs')
+    .select('*')
+    .eq('client_name', clientName)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  if (error) throw error;
+  return data as FirecrawlPartnerJobRow;
 }

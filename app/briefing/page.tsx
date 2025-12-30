@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import KPICards from '@/components/dashboard/KPICards';
 import InsightsPanel from '@/components/dashboard/InsightsPanel';
-import BriefingTable from '@/components/briefing/BriefingTable';
-import BriefingDrawer from '@/components/briefing/BriefingDrawer';
+import PartnerTable from '@/components/dashboard/PartnerTable';
+import type { PartnerTableHandle } from '@/components/dashboard/PartnerTable';
+import PartnerDrawer from '@/components/dashboard/PartnerDrawer';
 import { Partner, DashboardMetrics } from '@/lib/types';
+import RunSummary from '@/components/dashboard/RunSummary';
 import { applyFilters } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -19,6 +21,9 @@ export default function BriefingPage() {
   const [loading, setLoading] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
   const [selectedPartnerNotionUrl, setSelectedPartnerNotionUrl] = useState<string>('');
+  const tableRef = useRef<PartnerTableHandle>(null);
+  const [runSummary, setRunSummary] = useState<any>(null);
+  const [runTrace, setRunTrace] = useState<any>(null);
 
   useEffect(() => {
     if (!client) return;
@@ -38,6 +43,7 @@ export default function BriefingPage() {
       }
     };
     load();
+    fetchRunSummary(client);
   }, [client]);
 
   const handlePartnerClick = async (partner: Partner) => {
@@ -74,6 +80,39 @@ export default function BriefingPage() {
 
   const filtered = applyFilters(partners, {});
 
+  const fetchRunSummary = async (clientName: string) => {
+    try {
+      const res = await fetch(`/api/firecrawl/jobs?client=${encodeURIComponent(clientName)}`);
+      const data = await res.json();
+      if (res.ok && data.job) {
+        const trace = data.job.trace || [];
+        const summary = extractSummary(trace);
+        setRunSummary(summary);
+        setRunTrace(trace);
+      } else {
+        setRunSummary(null);
+        setRunTrace(null);
+      }
+    } catch {
+      setRunSummary(null);
+      setRunTrace(null);
+    }
+  };
+
+  const extractSummary = (trace: any[]) => {
+    if (!Array.isArray(trace)) return null;
+    const extractInfo = trace.find((t) => t.step === 'extract_summary')?.info || {};
+    const mapInfo = trace.find((t) => t.step === 'map')?.info || {};
+    return {
+      terminationReason: extractInfo.terminationReason,
+      finalPartnerCount: extractInfo.finalPartnerCount,
+      shortlistedCount: (mapInfo.shortlistedDirectoryUrls || []).length,
+      extractedCount: (extractInfo.extractedUrls || []).length,
+      dedupeDroppedCount: extractInfo.dedupeDroppedCount,
+      agenticRan: extractInfo.agenticRan,
+    };
+  };
+
   return (
     <div className="dashboardShell" data-theme="light">
       <div className="max-w-6xl mx-auto px-6 py-10 space-y-8">
@@ -100,14 +139,21 @@ export default function BriefingPage() {
         {!loading && metrics && <KPICards metrics={metrics} loading={false} />}
         {!loading && filtered.length > 0 && <InsightsPanel partners={filtered} />}
 
+        <RunSummary summary={runSummary} trace={runTrace} />
+
         {loading ? (
           <div className="text-[var(--muted)]">Loading briefing...</div>
         ) : (
-          <BriefingTable partners={filtered} onSelect={handlePartnerClick} />
+          <PartnerTable
+            partners={filtered}
+            onPartnerClick={handlePartnerClick}
+            ref={tableRef}
+            searchInputRef={null}
+          />
         )}
       </div>
 
-      <BriefingDrawer
+      <PartnerDrawer
         partner={selectedPartner}
         notionUrl={selectedPartnerNotionUrl}
         onClose={() => {

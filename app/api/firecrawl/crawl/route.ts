@@ -1,20 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { startCrawl, structuredDiscover } from '@/lib/firecrawl';
+import { discoverPartners, DISCOVERY_CONFIGS, PartnerDiscoveryMode } from '@/lib/firecrawl';
 import { mockDiscoveries } from '@/lib/mockData';
-import { createDiscoveries } from '@/lib/supabase';
+import { createDiscoveries, createPartnerJob, updatePartnerJob, supabaseServiceRoleKey } from '@/lib/supabase';
+import { addJobLog, updateJobLog } from '@/lib/firecrawlJobs';
 
 // Supabase writes are optional; Firecrawl requires its API key.
-const shouldMockStorage = () =>
-  !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  process.env.NEXT_PUBLIC_SUPABASE_URL === 'http://localhost' ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'dummy';
+const supabaseConfigured =
+  !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  process.env.NEXT_PUBLIC_SUPABASE_URL !== 'http://localhost' &&
+  !!supabaseServiceRoleKey;
+
+const shouldMockStorage = () => !supabaseConfigured;
 
 const canCallFirecrawl = () => !!process.env.FIRECRAWL_API_KEY;
 
 export async function POST(request: NextRequest) {
+  let supabaseJobId: string | null = null;
+  let currentClient = '';
+  let currentMode: PartnerDiscoveryMode = 'standard';
   try {
     const body = await request.json();
-    const { clientName, seedUrls, competitorDomains, keywords } = body;
+    const { clientName, seedUrls, mode: requestedMode } = body;
+    currentClient = clientName;
 
     if (!clientName || !seedUrls || seedUrls.length === 0) {
       return NextResponse.json(
@@ -23,8 +30,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const mode: PartnerDiscoveryMode =
+      requestedMode === 'aggressive' ? 'aggressive' : 'standard';
+    currentMode = mode;
+    const config = DISCOVERY_CONFIGS[mode];
+
     // Helper to stash results based on storage mode
-    const storeResults = async (jobId: string, results: any[], allowSupabase: boolean) => {
+    const storeResults = async (jobId: string, results: any[], allowSupabase: boolean, trace: any) => {
       if (results.length === 0) return 0;
       if (allowSupabase) {
         const toInsert = results.map((r) => ({
@@ -61,40 +73,35 @@ export async function POST(request: NextRequest) {
       return results.length;
     };
 
-    // First, try structured extraction (pattern-based) to reduce noise/cost.
-    let structuredStored = 0;
-    let structuredJobId = '';
-    if (canCallFirecrawl()) {
-      const { jobId, results } = await structuredDiscover(seedUrls[0]);
-      structuredJobId = jobId;
-      structuredStored = await storeResults(jobId || `structured-${Date.now()}`, results, clientName !== 'Demo Client' && !shouldMockStorage());
-      if (results.length > 0) {
-        return NextResponse.json({
-          jobId: jobId || `structured-${Date.now()}`,
-          status: 'completed',
-          structured: true,
-          mock: clientName === 'Demo Client' || shouldMockStorage(),
-          stored: structuredStored,
+    // Prepare job persistence (non-demo)
+    const shouldPersist = clientName !== 'Demo Client' && supabaseConfigured;
+    let supabaseJobId: string | null = null;
+
+    // Non-demo + Supabase: create running job row
+    if (shouldPersist && canCallFirecrawl()) {
+      if (!supabaseServiceRoleKey) {
+        console.error('Supabase service role missing');
+        return NextResponse.json({ error: 'Supabase insert failed' }, { status: 500 });
+      }
+      try {
+        const job = await createPartnerJob({
+          client_name: clientName,
+          seed_url: seedUrls[0],
+          mode,
+          status: 'running',
+          config,
+          trace: {},
+          partner_count: 0,
+          termination_reason: null,
         });
+        supabaseJobId = job.id;
+      } catch (err) {
+        console.error('Supabase insert failed:', err);
+        return NextResponse.json({ error: 'Supabase insert failed' }, { status: 500 });
       }
     }
 
-    // Demo client: if we have a Firecrawl key, call live API but store results in-memory only.
-    if (clientName === 'Demo Client' && canCallFirecrawl()) {
-      const { jobId, results } = await startCrawl({
-        clientName,
-        seedUrls,
-        competitorDomains: competitorDomains || [],
-        keywords: keywords || [],
-      });
-
-      const stored = await storeResults(jobId, results, false);
-      return NextResponse.json({ jobId, status: 'processing', mock: true, stored });
-    }
-
-    // Otherwise, decide mock vs real based on envs.
     if (!canCallFirecrawl()) {
-      // No Firecrawl key: fallback to mock for safety
       const jobId = `mock-job-${Date.now()}`;
       mockDiscoveries.unshift({
         id: jobId,
@@ -103,26 +110,79 @@ export async function POST(request: NextRequest) {
         website: seedUrls[0] || 'https://example.com',
         category: 'Generated',
         partner_type: 'Brand',
-        notes: (keywords || []).join(', '),
+        notes: '',
         inferred_reach: 50000,
         status: 'pending',
         created_at: new Date().toISOString(),
       });
+      if (!supabaseConfigured) {
+        console.log('Supabase not configured – running in demo/in-memory mode');
+      }
       return NextResponse.json({ jobId, status: 'processing', mock: true });
     }
 
-    const { jobId, results } = await startCrawl({
+    const { jobId, results, trace } = await discoverPartners(seedUrls[0], mode);
+    const stored = await storeResults(jobId, results, clientName !== 'Demo Client' && !shouldMockStorage(), trace);
+
+    const terminationReason = trace.find((t: any) => t.step === 'extract_summary')?.info?.terminationReason;
+
+    addJobLog({
       clientName,
-      seedUrls,
-      competitorDomains: competitorDomains || [],
-      keywords: keywords || [],
+      mode,
+      config,
+      trace,
+      jobId,
+      status: 'complete',
+      partnerCount: results.length,
+      terminationReason,
+      createdAt: new Date().toISOString(),
     });
 
-    const stored = await storeResults(jobId, results, !shouldMockStorage());
+    if (supabaseJobId) {
+      try {
+        const summary = trace.find((t: any) => t.step === 'extract_summary')?.info;
+        await updatePartnerJob(supabaseJobId, {
+          status: 'complete',
+          config,
+          trace,
+          partner_count: results.length,
+          termination_reason: summary?.terminationReason || null,
+        });
+      } catch (err) {
+        console.error('Failed to update partner job row:', err);
+      }
+    }
 
-    return NextResponse.json({ jobId, status: 'processing', stored, structured: false, mock: shouldMockStorage() });
+    return NextResponse.json({
+      jobId,
+      status: results.length > 0 ? 'completed' : 'processing',
+      mock: clientName === 'Demo Client' || shouldMockStorage(),
+      stored,
+      mode,
+      partnerCount: results.length,
+      terminationReason,
+    });
   } catch (error) {
     console.error('Error starting crawl:', error);
+    // Attempt to mark job failed if it was created
+    if (typeof supabaseJobId !== 'undefined' && supabaseJobId) {
+      try {
+        await updatePartnerJob(supabaseJobId, { status: 'failed', trace: [{ step: 'error', info: (error as Error)?.message }] });
+      } catch (err) {
+        console.error('Failed to update partner job row on error:', err);
+      }
+    }
+    addJobLog({
+      clientName: currentClient || 'unknown',
+      mode: currentMode,
+      config: {},
+      trace: [{ step: 'error', info: (error as Error)?.message }],
+      jobId: `error-${Date.now()}`,
+      status: 'failed',
+      partnerCount: 0,
+      terminationReason: 'failed',
+      createdAt: new Date().toISOString(),
+    });
     return NextResponse.json(
       { error: 'Failed to start crawl', detail: (error as Error)?.message },
       { status: 500 }

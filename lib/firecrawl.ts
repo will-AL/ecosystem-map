@@ -1,13 +1,6 @@
 // Firecrawl API integration (thin wrapper around crawl endpoint)
 // This assumes Firecrawl returns { id, results?: [...] }. Results may be empty if crawling is async.
 
-export interface CrawlRequest {
-  clientName: string;
-  seedUrls: string[];
-  competitorDomains: string[];
-  keywords: string[];
-}
-
 export interface CrawlResult {
   partnerName: string;
   website?: string;
@@ -15,6 +8,7 @@ export interface CrawlResult {
   partnerType?: string;
   notes?: string;
   inferredReach?: number;
+  sourceUrl?: string;
 }
 
 interface FirecrawlResponse {
@@ -29,13 +23,66 @@ interface FirecrawlResponse {
   }>;
 }
 
-export async function startCrawl(request: CrawlRequest): Promise<{ jobId: string; results: CrawlResult[] }> {
+// Discovery config
+export type PartnerDiscoveryMode = 'standard' | 'aggressive';
+
+export interface PartnerDiscoveryConfig {
+  mode: PartnerDiscoveryMode;
+  maxDepth: number;
+  maxPages: number;
+  includeSubdomains: boolean;
+  allowedSubdomains?: string[];
+  maxPartners: number;
+  agenticThreshold: number;
+  agenticMaxDirectoryPages: number;
+  agenticMaxPaginationAttempts: number;
+  cacheTTLms: number;
+}
+
+export const DISCOVERY_CONFIGS: Record<PartnerDiscoveryMode, PartnerDiscoveryConfig> = {
+  standard: {
+    mode: 'standard',
+    maxDepth: 2,
+    maxPages: 120,
+    includeSubdomains: false,
+    allowedSubdomains: [],
+    maxPartners: 200,
+    agenticThreshold: 8,
+    agenticMaxDirectoryPages: 2,
+    agenticMaxPaginationAttempts: 1,
+    cacheTTLms: 24 * 60 * 60 * 1000,
+  },
+  aggressive: {
+    mode: 'aggressive',
+    maxDepth: 3,
+    maxPages: 300,
+    includeSubdomains: true,
+    allowedSubdomains: ['marketplace.', 'apps.', 'partners.'],
+    maxPartners: 400,
+    agenticThreshold: 8,
+    agenticMaxDirectoryPages: 2,
+    agenticMaxPaginationAttempts: 1,
+    cacheTTLms: 24 * 60 * 60 * 1000,
+  },
+};
+
+type CacheKey = string;
+const discoveryCache = new Map<CacheKey, { expires: number; results: CrawlResult[]; directoryUrls: string[] }>();
+
+function makeCacheKey(baseUrl: string, mode: PartnerDiscoveryMode) {
+  try {
+    const url = new URL(baseUrl);
+    return `${url.hostname.toLowerCase()}::${mode}`;
+  } catch {
+    return `${baseUrl}::${mode}`;
+  }
+}
+
+export async function startCrawl(primaryUrl: string): Promise<{ jobId: string; results: CrawlResult[] }> {
   if (!process.env.FIRECRAWL_API_KEY) {
     throw new Error('Missing FIRECRAWL_API_KEY');
   }
 
-  // Firecrawl v2 expects a single url field (not urls/keywords). Use the first seed URL.
-  const primaryUrl = request.seedUrls[0];
   if (!primaryUrl) {
     throw new Error('At least one seed URL is required');
   }
@@ -192,21 +239,201 @@ async function extractPartnersFromUrl(url: string): Promise<CrawlResult[]> {
     notes: p.description,
     inferredReach: undefined,
     partnerType: p.partnerType,
+    sourceUrl: url,
   }));
 }
 
-// Try structured extraction using directory-like candidate URLs.
-export async function structuredDiscover(seedUrl: string): Promise<{ jobId: string; results: CrawlResult[] }> {
-  const candidates = buildCandidateUrls(seedUrl);
-  for (const candidate of candidates) {
+// Helpers for map/shortlist/extract/agentic
+const ALLOWLIST_RE = /(partner|partners|integration|integrations|marketplace|app[-]?marketplace|apps|directory|technology[-]?partners|solutions[-]?partners)(\/|$)/i;
+const DENYLIST_RE = /(blog|press|news|events|webinars|careers|jobs|privacy|terms|legal|security|status|pricing|about|contact|support|docs|documentation|community)(\/|$)/i;
+const BLOCKED_EXT = ['.pdf', '.png', '.jpg', '.jpeg', '.svg', '.zip'];
+
+function isBlocked(url: string) {
+  return BLOCKED_EXT.some((ext) => url.toLowerCase().includes(ext));
+}
+
+async function findDirectoryPages(baseUrl: string, config: PartnerDiscoveryConfig): Promise<{ candidates: string[]; total: number; filtered: number }> {
+  if (!process.env.FIRECRAWL_API_KEY) throw new Error('Missing FIRECRAWL_API_KEY');
+  // Firecrawl MAP endpoint contract may differ; best-effort implementation
+  const resp = await fetch('https://api.firecrawl.dev/v1/map', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url: baseUrl,
+      includeSubdomains: config.includeSubdomains,
+      limit: config.maxPages,
+      maxDepth: config.maxDepth,
+    }),
+  });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Firecrawl map failed: ${resp.status} ${txt}`);
+  }
+  const data = await resp.json();
+  const urls: string[] = data?.urls || data?.data?.map?.urls || [];
+  const filtered = urls
+    .filter((u: string) => !isBlocked(u))
+    .filter((u: string) => ALLOWLIST_RE.test(u) && !DENYLIST_RE.test(u));
+
+  const scored = filtered.map((u) => {
+    const l = u.toLowerCase();
+    let score = 0;
+    if (ALLOWLIST_RE.test(l)) score += 2;
+    if (l.includes('partner')) score += 1;
+    if (l.includes('integration')) score += 1;
+    if (l.includes('marketplace')) score += 1;
+    return { url: u, score };
+  });
+  const ranked = scored.sort((a, b) => b.score - a.score).map((s) => s.url);
+  return { candidates: ranked.slice(0, 10), total: urls.length, filtered: filtered.length };
+}
+
+function dedupePartners(partners: CrawlResult[]): { results: CrawlResult[]; dropped: number } {
+  const seen = new Set<string>();
+  const out: CrawlResult[] = [];
+  let dropped = 0;
+  for (const p of partners) {
+    const name = (p.partnerName || '').trim().toLowerCase();
+    const host = (() => {
+      try {
+        return p.website ? new URL(p.website).hostname.toLowerCase() : p.sourceUrl ? new URL(p.sourceUrl).hostname.toLowerCase() : '';
+      } catch {
+        return '';
+      }
+    })();
+    const key = `${name}::${host}`;
+    if (!name || seen.has(key)) {
+      dropped += 1;
+      continue;
+    }
+    seen.add(key);
+    out.push(p);
+  }
+  return { results: out, dropped };
+}
+
+// Agentic placeholder: reuse extract with same prompt but mark agenticRan
+async function agenticExtract(urls: string[], config: PartnerDiscoveryConfig) {
+  const attempts: Array<{ url: string; paginationAttempted: boolean; partnersExtracted: number }> = [];
+  let collected: CrawlResult[] = [];
+  for (let i = 0; i < urls.length && i < config.agenticMaxDirectoryPages; i++) {
+    const url = urls[i];
+    const res = await extractPartnersFromUrl(url);
+    attempts.push({ url, paginationAttempted: false, partnersExtracted: res.length });
+    collected = collected.concat(res);
+    if (collected.length >= config.maxPartners) break;
+  }
+  return { partners: collected, attempts };
+}
+
+export interface DiscoveryTrace {
+  step: string;
+  info?: any;
+}
+
+export async function discoverPartners(seedUrl: string, mode: PartnerDiscoveryMode): Promise<{
+  jobId: string;
+  results: CrawlResult[];
+  trace: DiscoveryTrace[];
+}> {
+  const config = DISCOVERY_CONFIGS[mode];
+  const trace: DiscoveryTrace[] = [{ step: 'config', info: config }];
+  const cacheKey = makeCacheKey(seedUrl, mode);
+  const now = Date.now();
+
+  const cached = discoveryCache.get(cacheKey);
+  if (cached && cached.expires > now) {
+    trace.push({ step: 'cache_hit', info: { cacheKey, count: cached.results.length } });
+    return { jobId: `cached-${cacheKey}`, results: cached.results.slice(0, config.maxPartners), trace };
+  }
+
+  // Fast-path candidates from patterns
+  const fastCandidates = buildCandidateUrls(seedUrl);
+  trace.push({ step: 'fast_path_candidates', info: { fastPathCandidatesTried: fastCandidates } });
+
+  let collected: CrawlResult[] = [];
+  const extractedUrls: Array<{ url: string; partnersExtracted: number; partnersKept: number; partnersDropped: number }> = [];
+
+  for (const url of fastCandidates) {
+    const res = await extractPartnersFromUrl(url);
+    const filtered = res.filter((p) => p.partnerName && (p.website || p.notes));
+    const { results: deduped, dropped } = dedupePartners(filtered);
+    extractedUrls.push({ url, partnersExtracted: res.length, partnersKept: deduped.length, partnersDropped: dropped });
+    collected = collected.concat(deduped);
+    if (collected.length >= 25 || collected.length >= config.maxPartners) break;
+  }
+
+  // MAP / shortlist / extract if needed
+  if (collected.length < config.agenticThreshold) {
     try {
-      const results = await extractPartnersFromUrl(candidate);
-      if (results.length > 0) {
-        return { jobId: `structured-${Date.now()}`, results };
+      const mapRes = await findDirectoryPages(seedUrl, config);
+      trace.push({
+        step: 'map',
+        info: {
+          mapTotalUrls: mapRes.total,
+          mapFilteredUrls: mapRes.filtered,
+          shortlistedDirectoryUrls: mapRes.candidates,
+        },
+      });
+
+      for (const url of mapRes.candidates) {
+        const res = await extractPartnersFromUrl(url);
+        const filtered = res.filter((p) => p.partnerName && (p.website || p.notes));
+        const { results: deduped, dropped } = dedupePartners(filtered);
+        extractedUrls.push({ url, partnersExtracted: res.length, partnersKept: deduped.length, partnersDropped: dropped });
+        collected = collected.concat(deduped);
+        if (collected.length >= 25 || collected.length >= config.maxPartners) break;
       }
     } catch (err) {
-      console.warn('Structured extract failed for', candidate, err);
+      trace.push({ step: 'map_error', info: { error: (err as Error)?.message } });
     }
   }
-  return { jobId: '', results: [] };
+
+  // Agentic fallback if still low
+  let agenticRan = false;
+  const agenticAttempts: Array<{ url: string; paginationAttempted: boolean; partnersExtracted: number }> = [];
+  if (collected.length < config.agenticThreshold) {
+    agenticRan = true;
+    const candidates = extractedUrls.map((e) => e.url);
+    const { partners, attempts } = await agenticExtract(candidates.length ? candidates : fastCandidates.slice(0, 2), config);
+    const filtered = partners.filter((p) => p.partnerName && (p.website || p.notes));
+    const { results: deduped, dropped } = dedupePartners(filtered);
+    agenticAttempts.push(...attempts);
+    extractedUrls.push({ url: 'agentic', partnersExtracted: partners.length, partnersKept: deduped.length, partnersDropped: dropped });
+    collected = collected.concat(deduped);
+  }
+
+  const { results: dedupedFinal, dropped: dedupeDropped } = dedupePartners(collected);
+  let finalResults = dedupedFinal.slice(0, config.maxPartners);
+
+  // Cache store
+  discoveryCache.set(cacheKey, {
+    expires: now + config.cacheTTLms,
+    results: finalResults,
+    directoryUrls: extractedUrls.map((e) => e.url),
+  });
+
+  trace.push({
+    step: 'extract_summary',
+    info: {
+      extractedUrls,
+      dedupeDroppedCount: dedupeDropped,
+      agenticRan,
+      agenticAttempts,
+      finalPartnerCount: finalResults.length,
+      terminationReason:
+        finalResults.length >= config.agenticThreshold
+          ? 'map_extract_success'
+          : agenticRan && finalResults.length > 0
+          ? 'agentic_fallback_success'
+          : finalResults.length === 0
+          ? 'no_directory_found'
+          : 'failed',
+    },
+  });
+
+  return { jobId: `discover-${Date.now()}`, results: finalResults, trace };
 }

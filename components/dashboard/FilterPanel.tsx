@@ -32,11 +32,6 @@ export default function FilterPanel({ partners, filters, onFiltersChange, search
   };
 
   const relationshipStatuses = getUniqueValues(partners, 'relationshipStatus');
-  const progressStages = getUniqueValues(partners, 'progressStage');
-  const personas = getUniqueValues(partners, 'persona');
-  const categories = getUniqueValues(partners, 'category');
-  const tiers = getUniqueValues(partners, 'tier');
-  const distroMediums = getUniqueValues(partners, 'distroMediums');
   const mediaProperties = getUniqueValues(partners, 'mediaProperties');
 
   const activeChips = useMemo(() => {
@@ -46,11 +41,6 @@ export default function FilterPanel({ partners, filters, onFiltersChange, search
     };
     pushValues('Type', filters.partnerType);
     pushValues('Status', filters.relationshipStatus);
-    pushValues('Stage', filters.progressStage);
-    pushValues('Persona', filters.persona);
-    pushValues('Category', filters.category);
-    pushValues('Tier', filters.tier);
-    pushValues('Distro', filters.distroMediums);
     pushValues('Properties', filters.mediaProperties);
     if (filters.minReach) chips.push(`Reach ≥ ${filters.minReach}`);
     if (filters.hasEmail) chips.push('Has Email');
@@ -139,106 +129,6 @@ export default function FilterPanel({ partners, filters, onFiltersChange, search
                       className="mr-2"
                     />
                     <span className="text-sm">{status}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Progress Stage */}
-          {progressStages.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Progress Stage</label>
-              <div className="max-h-32 overflow-y-auto">
-                {progressStages.map((stage) => (
-                  <label key={stage} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={filters.progressStage?.includes(stage) || false}
-                      onChange={() => toggleMultiSelect('progressStage', stage)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">{stage}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Persona */}
-          {personas.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Persona</label>
-              <div className="max-h-32 overflow-y-auto">
-                {personas.map((persona) => (
-                  <label key={persona} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={filters.persona?.includes(persona) || false}
-                      onChange={() => toggleMultiSelect('persona', persona)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">{persona}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Category */}
-          {categories.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
-              <div className="max-h-32 overflow-y-auto">
-                {categories.map((category) => (
-                  <label key={category} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={filters.category?.includes(category) || false}
-                      onChange={() => toggleMultiSelect('category', category)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">{category}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Tier */}
-          {tiers.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Tier</label>
-              <div className="max-h-32 overflow-y-auto">
-                {tiers.map((tier) => (
-                  <label key={tier} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={filters.tier?.includes(tier) || false}
-                      onChange={() => toggleMultiSelect('tier', tier)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">{tier}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Distro Mediums */}
-          {distroMediums.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Distro Mediums</label>
-              <div className="max-h-32 overflow-y-auto">
-                {distroMediums.map((medium) => (
-                  <label key={medium} className="flex items-center mb-1">
-                    <input
-                      type="checkbox"
-                      checked={filters.distroMediums?.includes(medium) || false}
-                      onChange={() => toggleMultiSelect('distroMediums', medium)}
-                      className="mr-2"
-                    />
-                    <span className="text-sm">{medium}</span>
                   </label>
                 ))}
               </div>

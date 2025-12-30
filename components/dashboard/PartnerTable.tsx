@@ -25,12 +25,12 @@ const PartnerTable = forwardRef<PartnerTableHandle, PartnerTableProps>(function 
   const [activeIndex, setActiveIndex] = useState(-1);
   const baseColumns: Array<{ key: string; label: string; sortable?: keyof Partner }> = [
     { key: 'type', label: 'Type', sortable: 'type' },
+    { key: 'subType', label: 'Sub Type' },
     { key: 'reach', label: 'Reach', sortable: 'reach' },
     { key: 'relationshipStatus', label: 'Status', sortable: 'relationshipStatus' },
     { key: 'tier', label: 'Tier', sortable: 'tier' },
     { key: 'contact', label: 'Contact' },
     { key: 'properties', label: 'Properties' },
-    { key: 'subType', label: 'Sub Type' },
   ];
   const rowRefs = useRef<HTMLTableRowElement[]>([]);
 
@@ -133,15 +133,33 @@ const sortedPartners = [...partners].sort((a, b) => {
   };
 
   const renderCell = (key: string, partner: Partner) => {
+    const subTypeColors = (sub: string) => {
+      const t = partner.type?.toLowerCase();
+      if (t === 'person') return { bg: '#ede9fe', text: '#7c3aed' };
+      if (t === 'brand') return { bg: '#fce7f3', text: '#db2777' };
+      if (t === 'place') return { bg: '#fef3c7', text: '#c2410c' };
+      return getTagColors(sub);
+    };
+
     switch (key) {
       case 'type':
         return (
           <td className="px-6 py-4 whitespace-nowrap">
-            <span
-              className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getTypeBadgeClasses(partner.type)}`}
-            >
-              {partner.type || 'N/A'}
-            </span>
+            {partner.type ? (
+              (() => {
+                const { bg, text } = getTagColors(partner.type);
+                return (
+                  <span
+                    className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full"
+                    style={{ backgroundColor: bg, color: text }}
+                  >
+                    {partner.type}
+                  </span>
+                );
+              })()
+            ) : (
+              <span className="text-[var(--muted)]">N/A</span>
+            )}
           </td>
         );
       case 'reach':
@@ -208,7 +226,7 @@ const sortedPartners = [...partners].sort((a, b) => {
                   ? [partner.progressStage]
                   : []
                 ).map((sub) => {
-                  const { bg, text } = getTagColors(sub);
+                  const { bg, text } = subTypeColors(sub);
                   return (
                     <span
                       key={sub}
